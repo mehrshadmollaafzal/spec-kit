@@ -1,4 +1,4 @@
-"""External-adapter preparation and rollback shared by public lifecycle commands."""
+"""External-adapter preparation and rollback for project integration changes."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ def lifecycle_owns_rollback() -> bool:
 
 
 def lifecycle_success(message: str) -> None:
-    """Report success only after an external package transaction commits."""
+    """Defer success messages until the active lifecycle transaction commits."""
     pending = _success_messages.get()
     if pending is None:
         console.print(message)
@@ -264,10 +264,11 @@ def _restore_snapshots(root: Path, journal: _FileJournal) -> list[Path]:
         current_identity = _file_identity(path)
         if path in journal.pending or any(path in pending.parents for pending in journal.pending):
             original_identity = _file_identity(saved) if saved is not None else None
-            if current_identity != original_identity:
-                conflicts.append(path)
-            continue
-        if path not in journal.pending and current_identity != written_identity:
+            if current_identity == original_identity:
+                continue
+        # A repeated write can fail before changing the last completed write.
+        # It is still ours to restore. Preserve any other, unobserved bytes.
+        if current_identity != written_identity:
             conflicts.append(path)
             continue
         if path.is_dir() and not path.is_symlink():
@@ -302,7 +303,7 @@ def _transaction(
 ):
     """Journal operation-owned writes under an inter-process integration lock."""
     from ..shared_infra import _exclusive_project_lock
-    from .manifest import IntegrationManifest
+    from .manifest import IntegrationManifest, _ensure_safe_manifest_removal
 
     folders = {
         ".specify/integrations", ".specify/templates", ".specify/scripts",
@@ -320,8 +321,20 @@ def _transaction(
             folders.add(folder.rstrip("/"))
         manifest_path = root / ".specify" / "integrations" / f"{key}.manifest.json"
         if manifest_path.exists():
-            manifest = IntegrationManifest.load(key, root)
+            try:
+                manifest = IntegrationManifest.load(key, root)
+            except (ValueError, OSError) as exc:
+                raise installer.IntegrationInstallError(
+                    f"Integration manifest for '{key}' is unreadable: {exc}"
+                ) from exc
             for relative in manifest.files:
+                if not expected_records and target in BUILTIN_INTEGRATION_KEYS:
+                    # Built-in stale cleanup intentionally leaves inaccessible
+                    # old destinations alone. Never census through such parents.
+                    try:
+                        _ensure_safe_manifest_removal(root, root / relative)
+                    except ValueError:
+                        continue
                 installer.safe_project_path(root, relative, allow_leaf_symlink=True)
                 manifest_leaves.add(relative)
     for integration in INTEGRATION_REGISTRY.values():
@@ -380,8 +393,13 @@ def _transaction(
                         preserve_backup = True
                         console.print(
                             "[yellow]Warning:[/yellow] Preserved concurrent edits or incomplete writes to "
-                            f"{escape(str(conflicts))}. Recovery snapshots retained at {escape(str(backup))}"
+                            f"{escape(str(conflicts))}. Recovery snapshots retained at {escape(str(backup))}. "
+                            "Back up current edits and reconcile these paths before retrying:"
                         )
+                        for path in conflicts:
+                            saved, _ = journal.changes[path]
+                            prior = str(saved) if saved else "absent before the operation"
+                            console.print(f"  {escape(str(path))}: {escape(prior)}")
                 except (OSError, installer.IntegrationInstallError) as restore_error:
                     preserve_backup = True
                     raise installer.IntegrationInstallError(
@@ -465,7 +483,9 @@ def external_lifecycle(operation: str):
                         )
                     )
                 )
-                if not records and not download:
+                # Even a built-in upgrade owns a cross-component migration:
+                # shared infrastructure, integration files and the core workflow.
+                if not records and not download and operation != "upgrade":
                     return handler(*args, **kwargs)
                 with ExitStack() as stack:
                     messages: list[str] = []

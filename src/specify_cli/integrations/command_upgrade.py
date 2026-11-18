@@ -21,6 +21,7 @@ from ._command_upgrade_layout import (
     _legacy_command_root_changed,
     _legacy_command_root_upgrade_pending,
     _manifest_tracks_skill_layout,
+    _preflight_native_skills,
 )
 from ._commands import integration_app
 from ._lifecycle import external_lifecycle, lifecycle_success
@@ -43,6 +44,7 @@ def integration_upgrade(
     """
     from . import get_integration
     from .manifest import IntegrationManifest
+    from ..workflows._bundled import install_speckit
     from .. import _require_specify_project, _install_shared_infra_or_exit, _install_shared_infra
 
     project_root = _require_specify_project()
@@ -67,8 +69,15 @@ def integration_upgrade(
 
     manifest_path = project_root / ".specify" / "integrations" / f"{key}.manifest.json"
     if not manifest_path.exists():
+        workflow = install_speckit(project_root, "preflight")
+        if workflow not in {"not installed", "already current"}:
+            console.print(
+                f"[red]Cannot migrate without {escape(manifest_path.name)}.[/red] "
+                "Restore the original integration manifest from backup and retry."
+            )
+            raise typer.Exit(1)
         console.print(f"[yellow]No manifest found for integration '{key}'. Nothing to upgrade.[/yellow]")
-        console.print(f"Run [cyan]specify integration install {key}[/cyan] to perform a fresh install.")
+        console.print("Restore the original integration manifest from backup to upgrade its managed files.")
         raise typer.Exit(0)
 
     try:
@@ -195,9 +204,8 @@ def integration_upgrade(
             )
             raise typer.Exit(1)
 
-    from ..workflows._bundled import install_speckit_or_exit
-
-    install_speckit_or_exit(project_root, "upgrade")
+    install_speckit(project_root, "preflight")
+    required_skills = _preflight_native_skills(integration, project_root, old_manifest)
 
     # Ensure shared infrastructure is up to date; --force overwrites existing files.
     infra_integration = integration
@@ -229,7 +237,7 @@ def integration_upgrade(
 
     # Phase 1: Install new files (overwrites existing; old-only files remain)
     console.print(f"Upgrading integration: [cyan]{key}[/cyan]")
-    new_manifest = IntegrationManifest(key, project_root, version=_get_speckit_version())
+    new_manifest = old_manifest.for_upgrade(_get_speckit_version())
 
     from ..events import resolve_events
     events_map = resolve_events(
@@ -248,6 +256,9 @@ def integration_upgrade(
             events=events_map,
             force=force,
         )
+        missing = required_skills - new_manifest.files.keys()
+        if missing:
+            raise ValueError(f"Missing core skills in the upgraded manifest: {sorted(missing)}")
         settings = _with_integration_setting(
             current,
             key,
@@ -291,11 +302,9 @@ def integration_upgrade(
         else:
             _refresh_init_options_speckit_version(project_root)
     except Exception as exc:
-        # Don't teardown — setup overwrites in-place, so teardown would
-        # delete files that were working before the upgrade.  Just report.
         console.print(f"[red]Error:[/red] Failed to {_cli_phase_label('upgrade', 'integration', key)}.")
         console.print(f"[dim]Details:[/dim] {_cli_error_detail(exc)}")
-        console.print("[yellow]The previous integration files may still be in place.[/yellow]")
+        console.print("The previous integration files may still be in place. Review any rollback conflicts before retrying.")
         raise typer.Exit(1)
 
     # Phase 2: Remove stale files from old manifest that are not in the new one
@@ -319,7 +328,7 @@ def integration_upgrade(
         # from the legacy commands layout to skills), leaving the integration
         # untracked and un-upgradeable.
         stale_removed, _ = stale_manifest.uninstall(
-            project_root, force=True, remove_manifest=False
+            project_root, force=True, remove_manifest=False, strict_removal=True
         )
         if stale_removed:
             console.print(f"  Removed {len(stale_removed)} stale file(s) from previous install")
@@ -343,7 +352,7 @@ def integration_upgrade(
     # Re-register enabled extensions and presets only when upgrading the
     # active integration. Inactive integrations remain untouched until
     # `use` or `switch` activates and rescaffolds them (#2948). This runs
-    # after the core upgrade transaction, so failures remain best-effort.
+    # with the established best-effort extension/preset registration policy.
     if key == installed_key:
         _register_extensions_for_agent(
             project_root,
@@ -359,11 +368,16 @@ def integration_upgrade(
         _resync_manifest_after_registration(
             new_manifest,
             key,
+            strict=True,
             continuing=(
                 "The integration was upgraded, but the manifest may report "
                 "preset/extension overrides as modified files."
             ),
         )
 
+    # Recheck ownership and compatibility under the workflow lock at publication.
+    # A failed swap or registry save also unwinds the integration write journal.
+    workflow_status = install_speckit(project_root, "upgrade")
+    lifecycle_success(f"speckit workflow: {workflow_status}")
     name = (integration.config or {}).get("name", key)
     lifecycle_success(f"\n[green]✓[/green] Integration '{escape(str(name))}' upgraded successfully")

@@ -180,6 +180,12 @@ class IntegrationManifest:
         """Path to the on-disk manifest JSON."""
         return self.project_root / ".specify" / "integrations" / f"{self.key}.manifest.json"
 
+    def for_upgrade(self, version: str) -> IntegrationManifest:
+        """Start a fresh ownership inventory for the same installation."""
+        manifest = IntegrationManifest(self.key, self.project_root, version=version)
+        manifest._installed_at = self._installed_at
+        return manifest
+
     # -- Recording files --------------------------------------------------
 
     def record_file(
@@ -371,6 +377,7 @@ class IntegrationManifest:
         *,
         force: bool = False,
         remove_manifest: bool = True,
+        strict_removal: bool = False,
     ) -> tuple[list[Path], list[Path]]:
         """Remove tracked files whose hash still matches.
 
@@ -382,6 +389,8 @@ class IntegrationManifest:
                 *partial* cleanups (e.g. the upgrade stale-file pass, which
                 builds a throwaway manifest over a subset of files) so the
                 real, freshly-saved manifest for the same key is not destroyed.
+            strict_removal: Propagate failures while removing an owned file
+                selected for deletion, so an upgrade can roll back.
 
         Returns:
             ``(removed, skipped)`` — absolute paths.
@@ -431,6 +440,8 @@ class IntegrationManifest:
                 _ensure_safe_manifest_removal(root, path)
                 path.unlink()
             except (ValueError, OSError):
+                if strict_removal:
+                    raise
                 skipped.append(path)
                 continue
             removed.append(path)

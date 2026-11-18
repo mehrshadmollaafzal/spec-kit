@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
@@ -13,6 +14,8 @@ from .catalog import WorkflowCatalogError, WorkflowRegistry
 from .catalog._domain import packaged_speckit
 from .catalog._versions import select_release
 from .engine import WorkflowDefinition, validate_workflow
+from .overlay import WorkflowResolver
+from .overlay.composer import StepListComposer
 
 # Git blob contents (LF) at the pre-fork revision 2ee2b1e8005905db05f5717300a469b3068b908f.
 _UPSTREAM_102 = "dc0409237d62f267b2d496022cbafadb1fcebe2c1335127fead51dbcd5acbd84"
@@ -22,15 +25,78 @@ def _digest(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def _check_upgrade_definition(
+    project: Path, candidate: Path, version: str | None, origin: str
+) -> None:
+    """Validate the workflow that a new run would resolve, including active overlays."""
+    from ..extensions import CORE_COMMAND_NAMES
+    from .composition import resolve_target
+
+    def validate_commands(definition, ancestry):
+        def check(step):
+            kind = step.get("type", "command")
+            if kind == "workflow":
+                child = resolve_target(project, step.get("workflow"), ancestry)
+                return validate_commands(child, (*ancestry, child.id))
+            if kind != "command":
+                return []
+            command = step.get("command")
+            if (
+                not isinstance(command, str)
+                or command.removeprefix("speckit.") not in CORE_COMMAND_NAMES
+            ):
+                return [f"step {step['id']!r}: cannot verify core command {command!r}"]
+            if step.get("verify_completion") is not True:
+                return [
+                    f"step {step['id']!r}: {command} requires verify_completion: true and capture: true"
+                ]
+            return []
+
+        return validate_workflow(definition, validate_step=check)
+
+    try:
+        layers = WorkflowResolver(project).collect_all_layers("speckit")
+        definition = WorkflowDefinition.from_yaml(candidate)
+        if any(layer.tier != "base" for layer in layers):
+            # The composer needs well-formed step mappings to address its edits.
+            errors = validate_workflow(definition)
+            if errors:
+                raise ValueError("; ".join(errors))
+            layers = [
+                replace(layer, path=candidate) if layer.tier == "base" else layer
+                for layer in layers
+            ]
+            definition, _ = StepListComposer().compose(layers)
+            if definition is None:
+                raise ValueError("installed workflow.yml is missing")
+        if definition.id != "speckit" or definition.version != version:
+            raise ValueError("workflow ID or version differs from its registry entry")
+        errors = validate_commands(definition, ("speckit",))
+        if errors:
+            raise ValueError("; ".join(errors))
+    except (OSError, ValueError, RecursionError) as exc:
+        raise ValueError(
+            f"Speckit workflow compatibility conflict ({origin}): {exc}. "
+            "Update the workflow or its overlays and retry. To replace the base, back up "
+            ".specify/workflows/speckit and its registry entry, then run:\n"
+            "  specify workflow add speckit --bundled\n"
+            "Then rerun integration upgrade."
+        ) from exc
+
+
 def install_speckit(
     project: Path,
-    mode: Literal["init", "upgrade", "replace"],
+    mode: Literal["init", "preflight", "upgrade", "replace"],
     *,
     version: str | None = None,
 ) -> str:
     workflows = project / ".specify/workflows"
     cli._reject_unsafe_dir(project / ".specify", ".specify")
     cli._reject_unsafe_dir(workflows, ".specify/workflows")
+    upgrading = mode in {"preflight", "upgrade"}
+    if upgrading and not workflows.exists():
+        # A project without workflow storage has nothing to reconcile.
+        return "not installed"
     with cli._workflow_install_transaction(project):
         directory = cli._safe_workflow_id_dir(workflows, "speckit")
         target = directory / "workflow.yml"
@@ -38,17 +104,8 @@ def install_speckit(
         existing = registry.get("speckit")
         if mode == "init" and existing is not None:
             return "already installed"
-        if mode == "upgrade" and existing is None and not target.exists():
+        if upgrading and not registry.is_installed("speckit") and not target.exists():
             return "not installed"
-        if (
-            mode == "upgrade"
-            and isinstance(existing, dict)
-            and existing.get("source") != "bundled"
-        ):
-            return (
-                "preserved workflow from a custom source. Review its command references. "
-                "To replace it after backup, run specify workflow add speckit --bundled."
-            )
 
         asset = _locate_bundled_workflow("speckit")
         if asset is None:
@@ -84,7 +141,7 @@ def install_speckit(
         if isinstance(existing, dict) and not existing.get("enabled", True):
             entry["enabled"] = False
         installed = None
-        if mode != "replace" and (target.exists() or existing is not None):
+        if mode != "replace" and (target.exists() or registry.is_installed("speckit")):
             installed = target.read_bytes() if target.is_file() else b""
             installed_digest = _digest(installed.replace(b"\r\n", b"\n"))
             recorded = existing if isinstance(existing, dict) else {}
@@ -100,10 +157,30 @@ def install_speckit(
                 or not (current or legacy)
                 or ("sha256" in recorded and recorded["sha256"] != _digest(installed))
             ):
+                if (
+                    upgrading
+                    and isinstance(recorded.get("source"), str)
+                    and recorded["source"]
+                ):
+                    origin = {
+                        "bundled": "customized bundle",
+                        "catalog": "catalog installation",
+                    }.get(recorded["source"], "explicit workflow source")
+                    _check_upgrade_definition(
+                        project, target, recorded.get("version"), origin
+                    )
+                    return f"preserved compatible {origin}"
                 raise ValueError(
-                    "Installed speckit workflow differs from the recognized bundle. Back up "
+                    "Speckit workflow compatibility conflict: unrecognized ownership. Back up "
                     "your workflow, run 'specify workflow add speckit --bundled' to replace it, "
                     "then rerun integration upgrade."
+                )
+            if upgrading:
+                _check_upgrade_definition(
+                    project,
+                    asset / "workflow.yml",
+                    definition.version,
+                    "bundled upgrade",
                 )
             if (
                 current
@@ -112,6 +189,8 @@ def install_speckit(
             ):
                 return "already current"
 
+        if mode == "preflight":
+            return "ready to upgrade"
         existed = directory.exists()
         staged = cli._stage_workflow_file(
             directory, use_project_file_mode=not target.exists()

@@ -559,6 +559,7 @@ def _resync_manifest_after_registration(
     *,
     continuing: str,
     unmodified_files: set[str] | None = None,
+    strict: bool = False,
 ) -> None:
     """Refresh tracked-file hashes after extensions/presets re-registration.
 
@@ -576,8 +577,8 @@ def _resync_manifest_after_registration(
     A new-target ``switch`` passes every tracked file, so files registration
     didn't change keep their recovered markers.
 
-    Best-effort: registration itself is best-effort, so a failure here must
-    not abort the surrounding upgrade/use/switch transaction.
+    Upgrades require a consistent manifest before publishing the workflow.
+    Other lifecycle operations retain best-effort registration.
     """
     try:
         from .manifest import _sha256, _validate_record_path
@@ -589,6 +590,8 @@ def _resync_manifest_after_registration(
             abs_path = new_manifest.project_root / rel
             try:
                 if abs_path.is_symlink() or not abs_path.is_file():
+                    if strict:
+                        raise ValueError(f"Tracked integration file is missing or unsafe: {rel}")
                     continue
                 # Only re-hash bytes registration changed: record_existing()
                 # also clears a file's recovered marker. Check the path the
@@ -600,6 +603,8 @@ def _resync_manifest_after_registration(
                 new_manifest.record_existing(rel)
                 changed = True
             except (ValueError, OSError, RuntimeError) as file_err:
+                if strict:
+                    raise
                 from .. import _print_cli_warning
 
                 _print_cli_warning(
@@ -613,6 +618,8 @@ def _resync_manifest_after_registration(
         if changed:
             new_manifest.save()
     except Exception as resync_err:
+        if strict:
+            raise
         from .. import _print_cli_warning
 
         _print_cli_warning(

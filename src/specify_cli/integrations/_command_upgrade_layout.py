@@ -5,6 +5,36 @@ from __future__ import annotations
 import json
 from pathlib import Path, PurePath
 
+
+def _preflight_native_skills(integration, project_root: Path, old_manifest) -> set[str]:
+    """Check the standard skills installer's inputs and return its required output paths."""
+    from . import BUILTIN_INTEGRATION_KEYS
+    from .base import SkillsIntegration, _CORE_COMMAND_TEMPLATE_ORDER
+
+    # External package recovery has separate ownership and consent rules.
+    # Adapters with their own setup also own their layout and preflight.
+    if (
+        integration.key not in BUILTIN_INTEGRATION_KEYS
+        or type(integration).setup is not SkillsIntegration.setup
+    ):
+        return set()
+    directory = integration.skills_dest(project_root).relative_to(project_root)
+    templates = {template.stem for template in integration.list_command_templates()}
+    owned = old_manifest.files
+    required = set()
+    for name in _CORE_COMMAND_TEMPLATE_ORDER:
+        relative = directory / f"speckit-{name}" / "SKILL.md"
+        if name not in templates:
+            raise ValueError(f"Missing command template for speckit-{name}")
+        if relative.as_posix() not in owned and (project_root / relative).exists():
+            raise ValueError(
+                f"Skill ownership conflict: {relative} is untracked. "
+                "Move the custom skill to a separate directory, then retry the upgrade."
+            )
+        required.add(relative.as_posix())
+    return required
+
+
 def _manifest_tracks_skill_layout(manifest) -> bool:
     """Return True when *manifest* tracks any skills-layout artifact.
 

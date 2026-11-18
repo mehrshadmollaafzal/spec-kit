@@ -16,6 +16,7 @@ import re
 import tempfile
 import threading
 import uuid
+from collections.abc import Callable
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
@@ -227,7 +228,11 @@ def _dispatch_default_errors(definition: WorkflowDefinition) -> list[str]:
     return errors
 
 
-def validate_workflow(definition: WorkflowDefinition) -> list[str]:
+def validate_workflow(
+    definition: WorkflowDefinition,
+    *,
+    validate_step: Callable[[dict[str, Any]], list[str]] | None = None,
+) -> list[str]:
     """Validate a workflow definition and return a list of error messages.
 
     An empty list means the workflow is valid.
@@ -411,7 +416,7 @@ def validate_workflow(definition: WorkflowDefinition) -> list[str]:
     input_defs: dict[str, Any] | None = (
         dict(definition.inputs) if isinstance(definition.inputs, dict) else None
     )
-    _validate_steps(definition.steps, seen_ids, errors, input_defs)
+    _validate_steps(definition.steps, seen_ids, errors, input_defs, validate_step=validate_step)
 
     return errors
 
@@ -422,6 +427,7 @@ def _validate_steps(
     errors: list[str],
     input_defs: dict[str, Any] | None = None,
     inside_fan_out: bool = False,
+    validate_step: Callable[[dict[str, Any]], list[str]] | None = None,
 ) -> None:
     """Recursively validate a list of steps.
 
@@ -482,6 +488,8 @@ def _validate_steps(
         if step_impl:
             step_errors = step_impl.validate(step_config)
             errors.extend(step_errors)
+        if validate_step:
+            errors.extend(validate_step(step_config))
 
         if step_type == "slot" and inside_fan_out:
             errors.append(
@@ -597,6 +605,7 @@ def _validate_steps(
                     errors,
                     input_defs,
                     inside_fan_out=inside_fan_out,
+                    validate_step=validate_step,
                 )
 
         # Validate switch cases
@@ -610,6 +619,7 @@ def _validate_steps(
                         errors,
                         input_defs,
                         inside_fan_out=inside_fan_out,
+                        validate_step=validate_step,
                     )
 
         # Validate switch default
@@ -621,6 +631,7 @@ def _validate_steps(
                 errors,
                 input_defs,
                 inside_fan_out=inside_fan_out,
+                validate_step=validate_step,
             )
 
         # Validate fan-out nested step (template — not added to seen_ids
@@ -634,6 +645,7 @@ def _validate_steps(
                 fan_errors,
                 input_defs,
                 inside_fan_out=True,
+                validate_step=validate_step,
             )
             errors.extend(fan_errors)
 
