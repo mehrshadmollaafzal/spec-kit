@@ -116,7 +116,19 @@ An interrupted `IN_PROGRESS` task resumes the same attempt. Failed attempts are 
 to three per unchanged task/design; independent ready tasks remain available. Existing
 source is inspected and continued, never erased merely to resume. Source hashes detect
 external changes; authorized integration into shared files updates earlier file evidence.
-Completion requires nonempty output files and a coding note, but cannot prove code quality.
+A changed task or recorded source requires explicit review of its completed dependents,
+including indirect dependents. Resume and complete those reviews in dependency order.
+Compatible code can pass review with a coding note and its existing bytes.
+
+Existing schema-1 `files` arrays and ledgers continue to work. Each path requires
+a nonempty regular file unless also listed in the optional `delete_files` array.
+For a rename, use `"files": ["src/old.py", "src/new.py"], "delete_files": ["src/old.py"]`.
+The helper checks the final state of both paths. It records `absent` for the removed
+path and a digest for the destination. An approved deletion of a prior owner's output
+retains its original digest and identifies the superseding task in `superseded_by`.
+Start the removal while the prior owner's digest still matches. Reconcile any earlier
+edit before removing the file. The superseding task owns absence while its inventory
+still declares the deletion.
 
 State writes use an exclusive lock and atomic replacement. A crashed writer can leave
 `code-progress.lock`; check that no helper is active before removing that lock. Never
@@ -167,13 +179,35 @@ workflow can comply; commands must report that conflict rather than reinterpret 
 
 ## Migration and customization
 
-Use this fork's CLI to upgrade an existing integration:
+Run these commands from the target project with this fork's `specify` executable
+on PATH. For a project initialized with Codex, use:
 
 ```powershell
-.\.venv\Scripts\specify.exe integration upgrade codex --help
+specify integration upgrade codex
 ```
 
-Run the upgrade from the target project with the fork CLI executable's absolute path.
+Upgrade recognizes the parent revision's bundled speckit 1.0.2 by its content digest.
+It installs the fork workflow and updates its registry entry. A changed bundled YAML
+blocks automatic replacement, including when upgrading with `--force`. Back up
+`.specify/workflows/speckit/workflow.yml` outside the install directory and review
+how to port your changes. To explicitly replace the base and finish the upgrade, run:
+
+```powershell
+specify workflow add speckit --bundled
+specify integration upgrade codex
+```
+
+With default catalog settings, `specify workflow add speckit` installs the packaged
+workflow offline. An explicitly configured catalog takes precedence. Use
+`specify workflow add --dev ./speckit` to select a local directory with the same name.
+`--bundled`
+selects the packaged copy even with a custom catalog. For a routine check or migration
+of an installed bundle, use `specify workflow update speckit`. Existing run snapshots
+retain their original steps. A legacy run that needs retired commands requires the
+old integration. After migration start a new run with
+`specify workflow run speckit --input spec="Your feature description"`.
+Review custom overlays and explicitly sourced workflows against the new command names.
+
 Normal upgrade refreshes tracked unchanged skills/shared files and preserves customizations;
 review any reported conflicts. Do not use `--force` without reviewing what it overwrites.
 Generated skills are copies: editing repository templates does not refresh an existing

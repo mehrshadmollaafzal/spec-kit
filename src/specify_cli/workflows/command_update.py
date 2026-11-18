@@ -49,6 +49,12 @@ def workflow_update(
         if not isinstance(metadata, dict):
             cli.console.print(f"⚠  {safe_id}: Registry entry is corrupted (skipping)")
             continue
+        if wf_id == "speckit" and metadata.get("source") == "bundled":
+            from ._bundled import install_speckit_or_exit
+
+            install_speckit_or_exit(project_root, "upgrade")
+            checked += 1
+            continue
         if metadata.get("source") != "catalog":
             cli.console.print(
                 f"⚠  {safe_id}: Not installed from a catalog — re-add to update (skipping)"

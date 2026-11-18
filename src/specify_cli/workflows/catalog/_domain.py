@@ -66,6 +66,7 @@ class WorkflowCatalogEntry:
     priority: int
     install_allowed: bool
     description: str = ""
+    packaged: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +302,20 @@ class WorkflowRegistry:
 # ---------------------------------------------------------------------------
 
 
+def packaged_speckit() -> dict:
+    from ..._assets import _locate_core_pack, _repo_root
+
+    root = _locate_core_pack() or _repo_root()
+    try:
+        catalog = json.loads((root / "workflows/catalog.json").read_text(encoding="utf-8"))
+        entry = catalog["workflows"]["speckit"]
+        if not isinstance(entry, dict):
+            raise ValueError("Expected a speckit workflow catalog entry")
+        return entry
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise WorkflowCatalogError(f"Cannot read packaged workflow catalog: {exc}") from exc
+
+
 class WorkflowCatalog:
     """Manages workflow catalog fetching, caching, and searching.
 
@@ -312,8 +327,8 @@ class WorkflowCatalog:
     """
 
     DEFAULT_CATALOG_URL = (
-        "https://raw.githubusercontent.com/github/spec-kit/main/"
-        "workflows/catalog.json"
+        "https://raw.githubusercontent.com/mehrshadmollaafzal/spec-kit/"
+        "codex/eleven-command-workflow/workflows/catalog.json"
     )
     COMMUNITY_CATALOG_URL = (
         "https://raw.githubusercontent.com/github/spec-kit/main/"
@@ -510,7 +525,8 @@ class WorkflowCatalog:
                 name="default",
                 priority=1,
                 install_allowed=True,
-                description="Official workflows",
+                description="Fork workflows, including the packaged speckit definition",
+                packaged=True,
             ),
             WorkflowCatalogEntry(
                 url=self.COMMUNITY_CATALOG_URL,
@@ -676,7 +692,14 @@ class WorkflowCatalog:
                         wf_data["_catalog_name"] = entry.name
                         wf_data["_install_allowed"] = entry.install_allowed
                         merged[wf_id] = wf_data
-        if fetch_errors == len(catalogs) and catalogs:
+        # Only the implicit default's core workflow is package-backed. Keep
+        # remote discovery, caching and configured-source policy for other IDs.
+        if catalogs and catalogs[0].packaged:
+            merged["speckit"] = {
+                **packaged_speckit(), "_catalog_name": catalogs[0].name,
+                "_install_allowed": catalogs[0].install_allowed,
+            }
+        elif fetch_errors == len(catalogs) and catalogs:
             raise WorkflowCatalogError(
                 "All configured catalogs failed to fetch."
             )

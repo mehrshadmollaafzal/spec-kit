@@ -43,6 +43,7 @@ env/
 # Spec Kit-specific files
 .genreleases/
 *.zip
+!tests/fixtures/fork-workflow/upstream-codex-init.zip
 sdd-*/
 docs/dev
 

@@ -36,6 +36,9 @@ and runtime locations.
    setup, firewall changes, deployment scripts and testing belong to later commands.
 3. Each task names requirement IDs, coding category, architecture component, environment
    asset IDs, exact source paths, dependency IDs and coding-output completion criteria.
+   For an approved removal include the path in both `files` and `delete_files`.
+   For a rename also own the destination in `files`. Identify the earlier owner and
+   describe which output the new task supersedes.
    Quote the constraint verbatim in the task description for every relevant data-model
    field (max length, nullable/required, enum values and validation rules), using title
    or done_when. Include contract references. No tests/deployment/acceptance gates.

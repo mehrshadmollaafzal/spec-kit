@@ -483,7 +483,7 @@ def _stage_workflow_file(
             os.close(fd)
             fd = -1
             staged_file.unlink()
-            flags = os.O_RDWR | os.O_CREAT | os.O_EXCL
+            flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
             flags |= getattr(os, "O_NOFOLLOW", 0)
             fd = os.open(staged_file, flags, 0o666)
     except OSError:
@@ -1402,8 +1402,17 @@ def _install_workflow_from_catalog(
         console.print(f"[red]Error:[/red] Workflow '{safe_wf_id}' not found in catalog")
         raise typer.Exit(1)
 
+    if workflow_id == "speckit" and info.get("id", workflow_id) != workflow_id:
+        console.print("[red]Error:[/red] Catalog entry ID does not match speckit.")
+        raise typer.Exit(1)
+
     if requested_version is not None:
         expected_version = info["version"]
+    elif workflow_id == "speckit" and expected_version is None:
+        expected_version = info.get("version")
+        if not isinstance(expected_version, str) or not expected_version.strip():
+            console.print("[red]Error:[/red] Catalog entry for speckit needs a version.")
+            raise typer.Exit(1)
 
     if not info.get("_install_allowed", True):
         console.print(f"[yellow]Warning:[/yellow] Workflow '{safe_wf_id}' is from a discovery-only catalog")

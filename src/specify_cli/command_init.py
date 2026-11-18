@@ -22,7 +22,6 @@ from ._agent_config import (
 )
 from ._assets import (
     _locate_bundled_preset,
-    _locate_bundled_workflow,
     get_speckit_version,
 )
 from ._console import StepTracker, console, select_with_arrows, show_banner
@@ -816,47 +815,13 @@ def register(app: typer.Typer) -> None:
                 )
 
                 try:
-                    bundled_wf = _locate_bundled_workflow("speckit")
-                    if bundled_wf:
-                        from .workflows.catalog import WorkflowRegistry
-                        from .workflows.engine import WorkflowDefinition
+                    from .workflows._bundled import install_speckit
 
-                        wf_registry = WorkflowRegistry(project_path)
-                        if wf_registry.is_installed("speckit"):
-                            tracker.complete("workflow", "already installed")
-                        else:
-                            import shutil as _shutil
-
-                            dest_wf = (
-                                project_path / ".specify" / "workflows" / "speckit"
-                            )
-                            dest_wf.mkdir(parents=True, exist_ok=True)
-                            from .integrations._file_changes import after_file_change, before_file_change
-
-                            before_file_change(dest_wf / "workflow.yml")
-                            _shutil.copy2(
-                                bundled_wf / "workflow.yml",
-                                dest_wf / "workflow.yml",
-                            )
-                            after_file_change(dest_wf / "workflow.yml")
-                            definition = WorkflowDefinition.from_yaml(
-                                dest_wf / "workflow.yml"
-                            )
-                            wf_registry.add(
-                                "speckit",
-                                {
-                                    "name": definition.name,
-                                    "version": definition.version,
-                                    "description": definition.description,
-                                    "source": "bundled",
-                                },
-                            )
-                            tracker.complete("workflow", "speckit installed")
-                    else:
-                        tracker.skip("workflow", "bundled workflow not found")
+                    tracker.complete("workflow", install_speckit(project_path, "init"))
                 except Exception as wf_err:
                     sanitized_wf = str(wf_err).replace("\n", " ").strip()
                     tracker.error("workflow", f"install failed: {sanitized_wf[:120]}")
+                    raise
 
                 init_opts = {
                     **previous_init_options,

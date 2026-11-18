@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 import tempfile
 
@@ -97,6 +99,11 @@ def read_state(path: Path) -> dict | None:
             or not isinstance(item.get("definition_hash"), str)
             or not isinstance(item.get("file_hashes"), dict)
             or not isinstance(item.get("starting_hashes", {}), dict)
+            or not isinstance(item.get("superseded_by", {}), dict)
+            or any(
+                not isinstance(owner, str) or name not in item["file_hashes"]
+                for name, owner in item.get("superseded_by", {}).items()
+            )
         ):
             raise ValueError(f"Invalid progress entry: {key}")
     return value
@@ -104,9 +111,23 @@ def read_state(path: Path) -> dict | None:
 
 def file_hash(root: Path, name: str) -> str:
     path = source_path(root, name)
-    return (
-        hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "missing"
-    )
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return "absent"
+    if not stat.S_ISREG(mode):
+        return "not-file"
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def current_files(entry: dict, task: dict, definitions: dict) -> list[str]:
+    """A completed deletion owns absence until taskscode revises or retires it."""
+    superseded = entry.get("superseded_by", {})
+    return [
+        name
+        for name in task["files"]
+        if name not in definitions.get(superseded.get(name), {}).get("delete_files", [])
+    ]
 
 
 def effective_status(
@@ -124,7 +145,7 @@ def effective_status(
                     if name in starting_hashes
                     else file_hash(root, name)
                 )
-                for name in definitions[key]["files"]
+                for name in current_files(entry, definitions[key], definitions)
             ):
                 statuses[key] = "NEEDS_REVIEW"
     # A changed prerequisite invalidates completion of its dependent code.
@@ -140,6 +161,25 @@ def effective_status(
     return statuses
 
 
+def persist_reviews(state: dict, definitions: dict, root: Path) -> None:
+    # An authorized unfinished edit can temporarily change a completed owner's
+    # file. Only persist invalidations visible against the pre-edit snapshot.
+    starting = {}
+    for key, entry in state["tasks"].items():
+        if entry["status"] in {"IN_PROGRESS", "BLOCKED"}:
+            starting.update(
+                {
+                    name: value
+                    for name, value in entry.get("starting_hashes", {}).items()
+                    if name in current_files(entry, definitions[key], definitions)
+                }
+            )
+    for key, effective in effective_status(state, definitions, root, starting).items():
+        entry = state["tasks"][key]
+        if effective == "NEEDS_REVIEW" and entry["status"] == "CODE_COMPLETE":
+            entry["status"] = effective
+
+
 def prerequisite_statuses(
     state: dict, definitions: dict, root: Path, key: str
 ) -> dict[str, str]:
@@ -153,9 +193,69 @@ def prerequisite_statuses(
         else {}
     )
     owned = {
-        name: starting[name] for name in definitions[key]["files"] if name in starting
+        name: starting[name]
+        for name in current_files(entry, definitions[key], definitions)
+        if name in starting
     }
     return effective_status(state, definitions, root, owned)
+
+
+def completed_outputs(
+    root: Path, entry: dict, task: dict, definitions: dict
+) -> dict[str, str]:
+    hashes = {}
+    for name in current_files(entry, task, definitions):
+        value = file_hash(root, name)
+        if name in task.get("delete_files", []):
+            if value != "absent":
+                raise ValueError(f"Deletion target must be absent: {name}")
+        elif (
+            value in {"absent", "not-file"} or value == hashlib.sha256(b"").hexdigest()
+        ):
+            raise ValueError(f"Task outputs must exist and be nonempty: {name}")
+        hashes[name] = value
+    return hashes
+
+
+def reconcile_shared_outputs(
+    state: dict, definitions: dict, task_id: str, hashes: dict
+) -> None:
+    """Transfer absence to its new owner and review consumers of revised outputs."""
+    entry = state["tasks"][task_id]
+    revised_owners = set()
+    for other_id, other in state["tasks"].items():
+        if other_id == task_id:
+            continue
+        for name in other["file_hashes"].keys() & hashes.keys():
+            if name not in current_files(other, definitions[other_id], definitions):
+                continue
+            if name in definitions[other_id].get("delete_files", []):
+                if hashes[name] != "absent":
+                    raise ValueError(
+                        f"Task {other_id} requires {name} absent; reconcile tasks first"
+                    )
+            elif hashes[name] == "absent":
+                if other["file_hashes"][name] != entry.get("starting_hashes", {}).get(
+                    name
+                ):
+                    raise ValueError(
+                        f"Prior evidence for {name} changed before deletion; reconcile tasks first"
+                    )
+                other.setdefault("superseded_by", {})[name] = task_id
+                revised_owners.add(other_id)
+            elif other["status"] == "CODE_COMPLETE":
+                if other["file_hashes"][name] != hashes[name]:
+                    revised_owners.add(other_id)
+                    other["file_hashes"][name] = hashes[name]
+    # The integration reviewed the shared owners. Consumers
+    # outside that review still depend on their former revision.
+    for key, consumer in state["tasks"].items():
+        if (
+            consumer["status"] == "CODE_COMPLETE"
+            and key not in revised_owners
+            and revised_owners.intersection(definitions[key]["depends_on"])
+        ):
+            consumer["status"] = "NEEDS_REVIEW"
 
 
 def operate(action: str, task_id: str | None = None, note: str = "") -> dict:
@@ -215,7 +315,18 @@ def operate(action: str, task_id: str | None = None, note: str = "") -> dict:
                         "definition_hash": digest(task),
                         "file_hashes": {},
                     }
+                    if old and old.get("superseded_by"):
+                        for name, owner in old["superseded_by"].items():
+                            if (
+                                name in task["files"]
+                                and name not in task.get("delete_files", [])
+                                and name
+                                in definitions.get(owner, {}).get("delete_files", [])
+                            ):
+                                entry.setdefault("superseded_by", {})[name] = owner
+                                entry["file_hashes"][name] = old["file_hashes"][name]
                 entries[key] = entry
+            persist_reviews({"tasks": entries}, definitions, selected["REPO_ROOT"])
             history = previous.get("history", [])
             if state and (previous["inputs"] != inputs or previous["tasks"] != entries):
                 history.append(
@@ -237,6 +348,7 @@ def operate(action: str, task_id: str | None = None, note: str = "") -> dict:
             )  # Reject stale definitions/design before mutation.
             if task_id not in definitions:
                 raise ValueError(f"Unknown task: {task_id}")
+            persist_reviews(state, definitions, selected["REPO_ROOT"])
             entry = state["tasks"][task_id]
             task = definitions[task_id]
             statuses = effective_status(state, definitions, selected["REPO_ROOT"])
@@ -271,6 +383,7 @@ def operate(action: str, task_id: str | None = None, note: str = "") -> dict:
                             for name in task["files"]
                         }
                 entry["status"] = "IN_PROGRESS"
+                persist_reviews(state, definitions, selected["REPO_ROOT"])
             elif action in {"complete", "block"}:
                 if entry["status"] != "IN_PROGRESS":
                     raise ValueError(
@@ -287,25 +400,26 @@ def operate(action: str, task_id: str | None = None, note: str = "") -> dict:
                         raise ValueError(
                             "A coding prerequisite changed; review it before completing this task"
                         )
-                    hashes = {
-                        name: file_hash(selected["REPO_ROOT"], name)
-                        for name in task["files"]
-                    }
-                    if "missing" in hashes.values() or any(
-                        source_path(selected["REPO_ROOT"], name).stat().st_size == 0
-                        for name in task["files"]
+                    hashes = completed_outputs(
+                        selected["REPO_ROOT"], entry, task, definitions
+                    )
+                    if task.get("delete_files") and any(
+                        key != task_id and other["file_hashes"].keys() & hashes.keys()
+                        for key, other in state["tasks"].items()
                     ):
-                        raise ValueError(
-                            "Task outputs must exist and be nonempty before CODE_COMPLETE"
+                        # A rename may also replace an earlier destination. Keep
+                        # both endpoints' prior evidence in the existing history.
+                        state["history"].append(
+                            {
+                                "at": now(),
+                                "inputs": inputs,
+                                "tasks": deepcopy(state["tasks"]),
+                            }
                         )
-                    entry["file_hashes"] = hashes
-                    # Authorized shared-file integration updates the recorded revision of earlier tasks.
-                    # The agent must inspect their contracts as part of this integration task.
-                    for other in state["tasks"].values():
-                        if other["status"] == "CODE_COMPLETE":
-                            for name in set(other.get("file_hashes", {})) & set(hashes):
-                                other["file_hashes"][name] = hashes[name]
+                    reconcile_shared_outputs(state, definitions, task_id, hashes)
+                    entry["file_hashes"].update(hashes)
                     entry["status"] = "CODE_COMPLETE"
+                    persist_reviews(state, definitions, selected["REPO_ROOT"])
                 else:
                     entry["status"] = "BLOCKED"
                 entry["note"] = note

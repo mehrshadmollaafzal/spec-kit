@@ -72,10 +72,15 @@ progress helper are allowed. No hidden test execution through hooks or package s
    No TODO stubs, NotImplementedError, constant fake results, omitted error handling or
    temporary placeholders count as complete. If changing a file shared with completed
    tasks, inspect and preserve their required behavior before recording completion.
+   Remove only owned paths explicitly listed in `delete_files`. For a rename inspect
+   both the removed source and the nonempty destination. Record the superseded
+   contract in the completion note. A prior owner's `superseded_by` entry identifies
+   the task responsible for the current absence. Leave that path to its current owner.
 6. Record success using `complete --task T001 --note "coding outputs and integration"`.
    CODE_COMPLETE means code was written and connected according to the plan; it does
    **not** mean correct behavior, tested, deployed or accepted. The helper records output
-   hashes and evidence, and never edits task definitions or executes application tools.
+   hashes and expected absences in code-progress.json. Use that ledger as the
+   completion artifact for removed paths. The helper never edits application files.
 7. On a failed attempt, use `block --task T001 --note "actual obstacle and changed files"`.
    At most three starts/attempts per unchanged task/design are allowed. Retry only when
    a concrete correction is available; never spin. After the bound, leave the obstacle

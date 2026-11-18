@@ -195,6 +195,10 @@ def integration_upgrade(
             )
             raise typer.Exit(1)
 
+    from ..workflows._bundled import install_speckit_or_exit
+
+    install_speckit_or_exit(project_root, "upgrade")
+
     # Ensure shared infrastructure is up to date; --force overwrites existing files.
     infra_integration = integration
     infra_key = key

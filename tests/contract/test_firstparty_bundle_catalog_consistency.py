@@ -101,12 +101,16 @@ def test_firstparty_workflow_catalog_entries_match_shipped_yamls():
             f"does not match the shipped workflow.yml version "
             f"({meta['version']})"
         )
+        repository = (
+            "mehrshadmollaafzal/spec-kit/3c5392f611b036105659156a321ff62e0dc98eb2"
+            if workflow_id == "speckit" else "github/spec-kit/main"
+        )
         assert entry["url"] == (
-            "https://raw.githubusercontent.com/github/spec-kit/main/"
+            f"https://raw.githubusercontent.com/{repository}/"
             f"workflows/{workflow_id}/workflow.yml"
         ), (
             f"catalog URL for workflow '{workflow_id}' does not point at the "
-            "shipped workflow.yml on the repository default branch"
+            "shipped workflow.yml in its source repository"
         )
 
 

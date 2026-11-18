@@ -173,13 +173,16 @@ def source_path(root: Path, value: str) -> Path:
             f"Coding tasks cannot own governance, testing or deployment files: {value}"
         )
     path = root.joinpath(*relative.parts)
-    if not path.resolve().is_relative_to(root):
+    resolved = path.resolve()
+    if not resolved.is_relative_to(root):
         raise ValueError(f"Task file escapes project: {value}")
     current = path
     while current != root:
         if current.is_symlink():
             raise ValueError(f"Symlinked task path: {value}")
         current = current.parent
+    if resolved != path:
+        raise ValueError(f"Aliased task path: {value}")
     return path
 
 
@@ -216,6 +219,15 @@ def tasks(selected: dict[str, Path]) -> dict[str, dict]:
                 raise ValueError(f"Task {key} needs nonempty {field}")
             if len(value) != len(set(value)):
                 raise ValueError(f"Task {key} repeats {field}")
+        deletions = task.get("delete_files", [])
+        if (
+            not isinstance(deletions, list)
+            or any(name not in task["files"] for name in deletions)
+            or len(set(deletions)) != len(deletions)
+        ):
+            raise ValueError(
+                f"Task {key} delete_files must be a unique subset of files"
+            )
         for target in task["deployment_targets"]:
             if (
                 target not in assets

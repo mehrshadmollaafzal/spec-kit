@@ -50,3 +50,9 @@ def test_stock_bundled_workflows_are_force_included():
         assert force_include[f"workflows/{workflow_id}"] == (
             f"specify_cli/core_pack/workflows/{workflow_id}"
         )
+
+
+def test_packaged_resolution_includes_the_workflow_catalog():
+    assert _force_include()["workflows/catalog.json"] == (
+        "specify_cli/core_pack/workflows/catalog.json"
+    )

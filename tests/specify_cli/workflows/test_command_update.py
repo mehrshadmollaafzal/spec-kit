@@ -171,9 +171,7 @@ steps:
         assert "up to date!" not in result.output
 
     def test_update_skip_message_accurate_for_bundled_source(self, project_dir, monkeypatch):
-        """A workflow registered with source "bundled" (e.g. the speckit
-        workflow installed by `specify init`) was never installed from a
-        local path or URL; the skip message must not claim otherwise."""
+        """Other bundled workflows retain the existing re-add guidance."""
         from typer.testing import CliRunner
         from specify_cli import app
         from specify_cli.workflows.catalog import WorkflowRegistry
@@ -181,8 +179,8 @@ steps:
         monkeypatch.chdir(project_dir)
         registry = WorkflowRegistry(project_dir)
         registry.add(
-            "speckit",
-            {"name": "Speckit", "version": "1.0.0", "source": "bundled"},
+            "assess",
+            {"name": "Assess", "version": "1.0.0", "source": "bundled"},
         )
         runner = CliRunner()
         result = runner.invoke(app, ["workflow", "update"])

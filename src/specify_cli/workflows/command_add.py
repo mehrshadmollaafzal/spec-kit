@@ -85,14 +85,36 @@ def workflow_add(
     version: Annotated[
         str | None, cli.typer.Option(help="Install an exact catalog release")
     ] = None,
+    bundled: Annotated[
+        bool, cli.typer.Option("--bundled", help="Install speckit from this CLI package")
+    ] = False,
 ):
     """Install a workflow from catalog, URL, or local path."""
     from .engine import WorkflowDefinition
 
     project_root = cli._require_specify_project()
+    core_id = source == "speckit" and not dev and from_url is None
+    if bundled and not core_id:
+        raise cli.typer.BadParameter("--bundled requires the speckit ID without --dev or --from")
     workflows_dir = _prepare_workflow_add(
-        project_root, source, dev=dev, from_url=from_url, version=version,
+        project_root, source, dev=dev, from_url=from_url, version=version, selected_catalog=core_id,
     )
+    if core_id:
+        from ._bundled import install_speckit_or_exit
+        from .catalog import WorkflowCatalog, WorkflowCatalogError
+
+        try:
+            use_package = bundled or WorkflowCatalog(project_root).get_active_catalogs()[0].packaged
+        except WorkflowCatalogError as exc:
+            cli.console.print(f"[red]Error:[/red] {cli._escape_markup(str(exc))}")
+            raise cli.typer.Exit(1) from exc
+        if use_package:
+            install_speckit_or_exit(project_root, "replace", version=version)
+        else:
+            cli._install_workflow_from_catalog(
+                project_root, workflows_dir, source, requested_version=version
+            )
+        return
 
     def _validate_and_install_local(
         yaml_path: cli.Path, source_label: str, expected_id: str | None = None

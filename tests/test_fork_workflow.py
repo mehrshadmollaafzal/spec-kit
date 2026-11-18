@@ -570,3 +570,309 @@ def test_upgrade_retires_managed_old_skills_and_preserves_customizations(
         assert result.exit_code == 0, result.output
         assert not (root / retired).exists()
         assert (root / ".agents/skills/speckit-taskscode/SKILL.md").is_file()
+
+
+def task_inventory(project):
+    path = project[1] / "tasks-code.md"
+    return path, json.loads(path.read_text().split("```json\n")[1].split("```")[0])
+
+
+@pytest.mark.parametrize("revision", ["definition", "source"])
+def test_durable_dependent_review(project, revision):
+    path, data = task_inventory(project)
+    data["tasks"].append(
+        {
+            **data["tasks"][1],
+            "id": "T004",
+            "depends_on": ["T002"],
+            "files": ["src/client.py"],
+        }
+    )
+    inventory(path, data)
+    progress(project, "sync")
+    for task in data["tasks"]:
+        progress(project, "start", "--task", task["id"])
+        output(project, task["files"][0])
+        complete = progress(
+            project, "complete", "--task", task["id"], "--note", "implemented"
+        )
+    independent = complete["tasks"]["T003"]
+    if revision == "definition":
+        data["tasks"][0]["done_when"] = "API emits display_name"
+        inventory(path, data)
+        progress(project, "sync")
+    else:
+        (project[0] / "src/api.py").write_text("reply = {'display_name': 'Alice'}")
+    for key, descendants in [
+        ("T001", ["T002", "T004"]),
+        ("T002", ["T004"]),
+        ("T004", []),
+    ]:
+        progress(project, "start", "--task", key)
+        progress(project, "sync")
+        result = progress(
+            project,
+            "complete",
+            "--task",
+            key,
+            "--note",
+            "reviewed against the revised contract",
+        )
+        assert result["tasks"]["T003"] == independent
+        assert result["code_complete"] == (not descendants)
+        assert all(
+            result["tasks"][child]["status"] == "NEEDS_REVIEW" for child in descendants
+        )
+        state = project[1] / "code-progress.json"
+        before = state.read_bytes()
+        assert progress(project, "status") == result
+        assert state.read_bytes() == before
+
+
+@pytest.mark.parametrize("rename", [False, True])
+def test_explicit_deletion_reconciles_completed_owner(project, rename):
+    path, data = task_inventory(project)
+    old, new = "src/api.py", "src/replacement.py"
+    data["tasks"] = data["tasks"][:2]
+    task = data["tasks"][1]
+    task.update(files=[old, new] if rename else [old], delete_files=[old])
+    inventory(path, data)
+    progress(project, "sync")
+    progress(project, "start", "--task", "T001")
+    output(project, old)
+    original = progress(project, "complete", "--task", "T001", "--note", "created")
+    progress(project, "start", "--task", "T002")
+    args = ("complete", "--task", "T002", "--note", "removed obsolete module")
+    if rename:
+        output(project, new)
+    assert invoke(project, "code_progress", *args).returncode == 1
+    (project[0] / old).unlink()
+    (project[0] / old).mkdir()
+    assert invoke(project, "code_progress", *args).returncode == 1
+    (project[0] / old).rmdir()
+    if rename:
+        (project[0] / new).unlink()
+        assert invoke(project, "code_progress", *args).returncode == 1
+        output(project, new)
+    progress(project, "sync")
+    assert progress(project, *args)["code_complete"]
+    status = progress(project, "status")
+    assert status["code_complete"]
+    assert (
+        status["tasks"]["T001"]["file_hashes"]
+        == original["tasks"]["T001"]["file_hashes"]
+    )
+    assert status["tasks"]["T002"]["file_hashes"][old] == "absent"
+    if rename:
+        (project[0] / new).write_text("changed")
+        assert not progress(project, "status")["code_complete"]
+        (project[0] / new).unlink()
+        assert not progress(project, "status")["code_complete"]
+        output(project, new)
+    output(project, old)
+    assert progress(project, "status")["tasks"]["T002"]["status"] == "NEEDS_REVIEW"
+    progress(project, "start", "--task", "T002")
+    (project[0] / old).unlink()
+    assert progress(project, *args)["code_complete"]
+
+
+def test_delete_records_absence(project):
+    path, data = task_inventory(project)
+    first = data["tasks"][0]
+    first["delete_files"] = first["files"]
+    inventory(path, data)
+    output(project, "src/api.py")
+    progress(project, "sync")
+    progress(project, "start", "--task", "T001")
+    (project[0] / "src/api.py").unlink()
+    progress(project, "complete", "--task", "T001", "--note", "retired")
+    assert progress(project, "status")["tasks"]["T001"]["file_hashes"] == {
+        "src/api.py": "absent"
+    }
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "../legacy",
+        "/absolute",
+        "C:/escape",
+        ".specify/memory/a",
+        "tests/unit.py",
+        "src/./api.py",
+    ],
+)
+def test_deletion_endpoints_obey_source_policy(project, bad):
+    path, data = task_inventory(project)
+    data["tasks"][0].update(files=[bad, "src/new.py"], delete_files=[bad])
+    inventory(path, data)
+    assert invoke(project, "code_progress", "validate").returncode == 1
+
+
+def test_deletion_requires_owned_path_and_serializes_both_endpoints(project):
+    path, data = task_inventory(project)
+    task = data["tasks"][2]
+    task.update(files=["src/new.py"], delete_files=["src/api.py"])
+    inventory(path, data)
+    assert invoke(project, "code_progress", "validate").returncode == 1
+    task["files"].append("src/api.py")
+    data["tasks"][1].update(depends_on=[], files=["src/new.py"])
+    inventory(path, data)
+    progress(project, "sync")
+    progress(project, "start", "--task", "T003")
+    for key in ("T001", "T002"):
+        failed = invoke(project, "code_progress", "start", "--task", key)
+        assert failed.returncode == 1 and "shares files" in failed.stderr
+
+
+def test_dangling_link_is_not_a_deletion(project):
+    path, data = task_inventory(project)
+    data["tasks"][0]["delete_files"] = ["src/api.py"]
+    inventory(path, data)
+    progress(project, "sync")
+    progress(project, "start", "--task", "T001")
+    link = project[0] / "src/api.py"
+    link.parent.mkdir()
+    try:
+        link.symlink_to(project[0] / "missing")
+    except OSError as exc:
+        pytest.skip(f"Cannot create symlink: {exc}")
+    failed = invoke(
+        project, "code_progress", "complete", "--task", "T001", "--note", "removed"
+    )
+    assert failed.returncode == 1 and "Symlinked" in failed.stderr
+
+
+def test_approved_shared_revision_requires_review_of_other_consumer(project):
+    path, data = task_inventory(project)
+    data["tasks"][2].update(depends_on=["T001"], files=["src/api.py"])
+    inventory(path, data)
+    progress(project, "sync")
+    for task in data["tasks"][:2]:
+        progress(project, "start", "--task", task["id"])
+        output(project, task["files"][0])
+        progress(project, "complete", "--task", task["id"], "--note", "implemented")
+    progress(project, "start", "--task", "T003")
+    (project[0] / "src/api.py").write_text("reply = {'display_name': 'Alice'}")
+    result = progress(
+        project, "complete", "--task", "T003", "--note", "integrated producer"
+    )
+    assert (
+        result["tasks"]["T001"]["status"]
+        == result["tasks"]["T003"]["status"]
+        == "CODE_COMPLETE"
+    )
+    assert result["tasks"]["T002"]["status"] == "NEEDS_REVIEW"
+
+
+def test_schema_one_interrupted_creation_then_new_deletion(project):
+    path, data = task_inventory(project)
+    producer, cleanup = data["tasks"][:2]
+    data["tasks"] = [producer]
+    inventory(path, data)
+    original = progress(project, "sync")
+    ledger = project[1] / "code-progress.json"
+    old = json.loads(ledger.read_bytes())
+    # Schema-1 start checkpoint before the fork understood absence evidence.
+    old["tasks"]["T001"].update(
+        status="IN_PROGRESS", attempts=1, starting_hashes={"src/api.py": "missing"}
+    )
+    ledger.write_text(json.dumps(old))
+    assert (
+        progress(project, "start", "--task", "T001")["tasks"]["T001"]["attempts"] == 1
+    )
+    output(project, "src/api.py")
+    done = progress(project, "complete", "--task", "T001", "--note", "original output")
+    assert done["code_complete"]
+    assert (
+        done["tasks"]["T001"]["definition_hash"]
+        == original["tasks"]["T001"]["definition_hash"]
+    )
+    cleanup.update(files=["src/api.py"], delete_files=["src/api.py"])
+    data["tasks"].append(cleanup)
+    inventory(path, data)
+    progress(project, "sync")
+    progress(project, "start", "--task", "T002")
+    (project[0] / "src/api.py").unlink()
+    progress(project, "complete", "--task", "T002", "--note", "superseded")
+    producer["title"] = "Review revised producer contract"
+    inventory(path, data)
+    progress(project, "sync")
+    for key in ("T001", "T002"):
+        progress(project, "start", "--task", key)
+        result = progress(project, "complete", "--task", key, "--note", "reviewed")
+    assert result["code_complete"]
+    assert (
+        result["tasks"]["T001"]["file_hashes"] == done["tasks"]["T001"]["file_hashes"]
+    )
+    assert not (project[0] / "src/api.py").exists()
+    assert json.loads(ledger.read_bytes())["history"][0]["tasks"] == done["tasks"]
+
+
+def test_deletion_cannot_supersede_preexisting_unreviewed_edit(project):
+    path, data = task_inventory(project)
+    data["tasks"][2].update(files=["src/api.py"], delete_files=["src/api.py"])
+    inventory(path, data)
+    progress(project, "sync")
+    progress(project, "start", "--task", "T001")
+    output(project, "src/api.py")
+    progress(project, "complete", "--task", "T001", "--note", "created")
+    (project[0] / "src/api.py").write_text("unreviewed")
+    progress(project, "start", "--task", "T003")
+    (project[0] / "src/api.py").unlink()
+    result = invoke(
+        project, "code_progress", "complete", "--task", "T003", "--note", "removed"
+    )
+    assert result.returncode == 1 and "Prior evidence" in result.stderr
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows directory junction")
+def test_deletion_rejects_junction_alias_of_protected_path(project):
+    root, _ = project
+    alias = root / "app-config"
+    import _winapi
+
+    _winapi.CreateJunction(str(root / ".specify"), str(alias))
+    try:
+        path, data = task_inventory(project)
+        endpoint = "app-config/feature.json"
+        data["tasks"][0].update(files=[endpoint], delete_files=[endpoint])
+        inventory(path, data)
+        assert invoke(project, "code_progress", "validate").returncode == 1
+    finally:
+        alias.rmdir()
+
+
+def test_rename_over_previous_destination_retains_both_revisions(project):
+    path, data = task_inventory(project)
+    source, destination = "src/api.py", "src/consumer.py"
+    inventory(path, data)
+    progress(project, "sync")
+    for key, name in (("T001", source), ("T002", destination)):
+        progress(project, "start", "--task", key)
+        output(project, name)
+        (project[0] / name).write_text(f"module = '{key}'")
+        prior = progress(project, "complete", "--task", key, "--note", "implemented")
+    data["tasks"][2].update(
+        files=[source, destination], delete_files=[source], depends_on=["T002"]
+    )
+    inventory(path, data)
+    progress(project, "sync")
+    progress(project, "start", "--task", "T003")
+    (project[0] / source).replace(project[0] / destination)
+    result = progress(
+        project,
+        "complete",
+        "--task",
+        "T003",
+        "--note",
+        "renamed and reviewed both owners",
+    )
+    assert result["code_complete"]
+    ledger = json.loads((project[1] / "code-progress.json").read_bytes())
+    assert any(
+        revision["tasks"]["T002"]["file_hashes"]
+        == prior["tasks"]["T002"]["file_hashes"]
+        and revision["tasks"]["T003"]["status"] == "IN_PROGRESS"
+        for revision in ledger["history"]
+    )

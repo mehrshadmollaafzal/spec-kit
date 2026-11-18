@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "updated_at": "2026-11-11T00:00:00Z",
-  "catalog_url": "https://raw.githubusercontent.com/github/spec-kit/main/workflows/catalog.json",
+  "catalog_url": "https://raw.githubusercontent.com/mehrshadmollaafzal/spec-kit/codex/eleven-command-workflow/workflows/catalog.json",
   "workflows": {
     "speckit": {
       "id": "speckit",
@@ -9,7 +9,8 @@
       "description": "Eleven-stage design, coding, optional deployment and testing workflow",
       "author": "GitHub",
       "version": "2.0.0",
-      "url": "https://raw.githubusercontent.com/github/spec-kit/main/workflows/speckit/workflow.yml",
+      "url": "https://raw.githubusercontent.com/mehrshadmollaafzal/spec-kit/3c5392f611b036105659156a321ff62e0dc98eb2/workflows/speckit/workflow.yml",
+      "sha256": "a61ed36e7e2a163321dbce93be244194690d0fae5d2de664432e323963607802",
       "tags": ["sdd", "full-cycle"],
       "bundled": true
     },
