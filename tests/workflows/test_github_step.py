@@ -385,5 +385,5 @@ steps:
     assert engine.validate(workflow) == []
     assert engine.execute(workflow, run_id="labels-run").status == RunStatus.COMPLETED
     assert set(labels) == {"ready", "needs-review"}
-    assert engine.execute(workflow, run_id="labels-run").status == RunStatus.COMPLETED
+    assert engine.execute(workflow, run_id="labels-repeat").status == RunStatus.COMPLETED
     assert len([method for method, _, _ in calls if method == "POST"]) == 2

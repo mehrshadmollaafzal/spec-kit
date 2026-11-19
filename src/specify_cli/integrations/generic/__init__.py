@@ -227,6 +227,14 @@ class GenericIntegration(MarkdownIntegration):
             "the output directory is resolved from parsed_options in setup()"
         )
 
+    def core_command_paths(
+        self, project_root: Path, name: str, parsed_options: dict[str, Any] | None
+    ) -> tuple[Path, ...]:
+        directory = project_root / self._resolve_commands_dir(parsed_options, {})
+        if self.is_skills_mode(parsed_options, project_root):
+            return (_GenericSkillsHelper._skill_path(directory, name),)
+        return (directory / self.command_filename(name),)
+
     def setup(
         self,
         project_root: Path,
@@ -265,11 +273,11 @@ class GenericIntegration(MarkdownIntegration):
 
         for src_file in templates:
             if skills_enabled:
-                skill_name, skill_content = self._build_skill_content(
+                _, skill_content = self._build_skill_content(
                     src_file, script_type, project_root
                 )
                 dst_file = self.write_file_and_record(
-                    skill_content, dest / skill_name / "SKILL.md",
+                    skill_content, _GenericSkillsHelper._skill_path(dest, src_file.stem),
                     project_root, manifest
                 )
                 created.append(dst_file)

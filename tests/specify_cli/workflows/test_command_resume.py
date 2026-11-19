@@ -393,9 +393,19 @@ steps:
         from unittest.mock import patch
         from typer.testing import CliRunner
         from specify_cli import app
+        from specify_cli.workflows.base import RunStatus
         from specify_cli.workflows.engine import RunState
 
         monkeypatch.chdir(project_dir)
+        # The path exists and passes metadata preflight. Inject the read
+        # failure when the engine opens the checkpoint under the run lock.
+        state = RunState(
+            run_id="unreadable-run", workflow_id="gated-wf", project_root=project_dir
+        )
+        state.status = RunStatus.PAUSED
+        state.save()
+        checkpoint = state.runs_dir / "state.json"
+        before = checkpoint.read_bytes()
         with patch.object(
             RunState, "load", side_effect=OSError("permission [denied]")
         ):
@@ -407,6 +417,7 @@ steps:
         assert result.exception is None or isinstance(result.exception, SystemExit)
         assert "Resume failed" in result.output
         assert "permission [denied]" in result.output
+        assert checkpoint.read_bytes() == before
 
     def test_resume_legacy_migration_checkpoint_error_is_reported_cleanly(
         self, project_dir, monkeypatch

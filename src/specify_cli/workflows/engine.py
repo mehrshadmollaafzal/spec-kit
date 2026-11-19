@@ -17,6 +17,7 @@ import tempfile
 import threading
 import uuid
 from collections.abc import Callable
+from contextlib import ExitStack
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +30,8 @@ from ..integration_state import (
     try_read_integration_json,
 )
 from ..integrations.base import DISPATCH_SETTINGS, dispatch_setting_value_error
+from ..shared_infra import _ensure_safe_shared_directory, _exclusive_file_lock
+from ._speckit_contract import uses_speckit_contract
 from .base import RunStatus, StepContext
 
 
@@ -653,6 +656,9 @@ def _validate_steps(
 # -- Run State Persistence ------------------------------------------------
 
 
+_RUN_LOCK_NAME = ".run.lock"
+
+
 class RunState:
     """Manages workflow run state for persistence and resume."""
 
@@ -904,6 +910,11 @@ class RunState:
             raise
 
     @classmethod
+    def _state_path(cls, run_id: str, project_root: Path) -> Path:
+        cls._validate_run_id(run_id)
+        return project_root / ".specify" / "workflows" / "runs" / run_id / "state.json"
+
+    @classmethod
     def load(cls, run_id: str, project_root: Path) -> RunState:
         """Load a run state from disk.
 
@@ -918,9 +929,8 @@ class RunState:
         *after* the file lookup — too late to prevent the disclosure.
         Mirrors the precedent in ``agents._ensure_within_directory``.
         """
-        cls._validate_run_id(run_id)
-        runs_dir = project_root / ".specify" / "workflows" / "runs" / run_id
-        state_path = runs_dir / "state.json"
+        state_path = cls._state_path(run_id, project_root)
+        runs_dir = state_path.parent
 
         try:
             with open(state_path, encoding="utf-8") as f:
@@ -1073,6 +1083,7 @@ class WorkflowEngine:
     def __init__(self, project_root: Path | None = None) -> None:
         self.project_root = project_root or Path(".")
         self.on_step_start: Any = None  # Callable[[str, str], None] | None
+        self._before_resume: Callable[[RunState], None] | None = None
         # Serializes on_step_start so a concurrent fan-out can't interleave the
         # callback's output (the CLI sets it to a console.print lambda). Uncontended
         # for sequential runs.
@@ -1181,36 +1192,56 @@ class WorkflowEngine:
         if dispatch_default_errors:
             raise ValueError(" ".join(dispatch_default_errors))
 
-        from . import STEP_REGISTRY
-
         effective_run_id = run_id
         if effective_run_id is None:
             env_run_id = os.environ.get("SPECKIT_WORKFLOW_RUN_ID", "").strip()
             if env_run_id:
                 effective_run_id = env_run_id
+        if effective_run_id is not None:
+            RunState._validate_run_id(effective_run_id)
 
-        state = RunState(
-            run_id=effective_run_id,
-            workflow_id=definition.id,
-            project_root=self.project_root,
-            installed_workflow_id=installed_workflow_id,
-            installed_registry_root=(
-                str(installed_registry_root)
-                if installed_registry_root is not None
-                else None
-            ),
-        )
+        resolved_inputs = self._resolve_inputs(definition, inputs or {})
+        for _ in range(10):
+            state = RunState(
+                run_id=effective_run_id,
+                workflow_id=definition.id,
+                project_root=self.project_root,
+                installed_workflow_id=installed_workflow_id,
+                installed_registry_root=(
+                    str(installed_registry_root)
+                    if installed_registry_root is not None
+                    else None
+                ),
+            )
+            self.project_root.mkdir(parents=True, exist_ok=True)
+            _ensure_safe_shared_directory(self.project_root, state.runs_dir.parent)
+            try:
+                # Creating the destination directory reserves the ID atomically.
+                state.runs_dir.mkdir()
+            except FileExistsError as exc:
+                if effective_run_id is not None:
+                    raise ValueError(f"Workflow run {state.run_id!r} already exists.") from exc
+            else:
+                break
+        else:
+            raise ValueError("Could not generate a unique workflow run ID.")
+
+        with _exclusive_file_lock(state.runs_dir / _RUN_LOCK_NAME, context="workflow run"):
+            return self._start_run(state, definition, resolved_inputs)
+
+    def _start_run(
+        self, state: RunState, definition: WorkflowDefinition, resolved_inputs: dict[str, Any],
+    ) -> RunState:
+        from . import STEP_REGISTRY
+
         self._execution_state.set(state)
 
         # Persist the definition the run was started with. Storage contract
         # (see RunState.definition_path): read by resume and by
         # `specify workflow definition`; do not change location or content.
-        state.runs_dir.mkdir(parents=True, exist_ok=True)
-        with open(state.definition_path, "w", encoding="utf-8") as f:
+        with open(state.definition_path, "x", encoding="utf-8") as f:
             yaml.safe_dump(definition.data, f, sort_keys=False, allow_unicode=True)
 
-        # Resolve inputs
-        resolved_inputs = self._resolve_inputs(definition, inputs or {})
         state.inputs = resolved_inputs
         workflow_dir = workflow_dir_for(definition)
         state.workflow_dir = workflow_dir
@@ -1227,6 +1258,7 @@ class WorkflowEngine:
             workflow_dir=workflow_dir,
             default_reasoning_effort=definition.default_reasoning_effort,
             default_context_size=definition.default_context_size,
+            speckit_completion=uses_speckit_contract(definition),
         )
 
         # Execute steps
@@ -1268,8 +1300,31 @@ class WorkflowEngine:
         """
         self._execution_state.set(None)
         self._load_integrations()
+        state_path = RunState._state_path(run_id, self.project_root)
+        directory = state_path.parent
+        try:
+            state_path.stat()
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(f"Run state not found: {state_path}") from exc
+        _ensure_safe_shared_directory(self.project_root, directory, create=False)
+        with ExitStack() as stack:
+            try:
+                stack.enter_context(
+                    _exclusive_file_lock(
+                        directory / _RUN_LOCK_NAME, context="workflow run", blocking=False,
+                    )
+                )
+            except BlockingIOError as exc:
+                raise ValueError(f"Workflow run {run_id!r} is already being executed.") from exc
+            return self._resume(run_id, inputs)
+
+    def _resume(self, run_id: str, inputs: dict[str, Any] | None) -> RunState:
+        # Read the checkpoint under exclusive ownership. Another process may
+        # have advanced the run since a CLI adapter's read-only preflight.
         state = RunState.load(run_id, self.project_root)
         self._execution_state.set(state)
+        if self._before_resume is not None:
+            self._before_resume(state)
         if state.status not in (RunStatus.PAUSED, RunStatus.FAILED):
             msg = f"Cannot resume run {run_id!r} with status {state.status.value!r}."
             raise ValueError(msg)
@@ -1328,6 +1383,7 @@ class WorkflowEngine:
             workflow_dir=state.workflow_dir,
             default_reasoning_effort=definition.default_reasoning_effort,
             default_context_size=definition.default_context_size,
+            speckit_completion=uses_speckit_contract(definition),
         )
 
         from . import STEP_REGISTRY

@@ -19,6 +19,8 @@ from .overlay.composer import StepListComposer
 
 # Git blob contents (LF) at the pre-fork revision 2ee2b1e8005905db05f5717300a469b3068b908f.
 _UPSTREAM_102 = "dc0409237d62f267b2d496022cbafadb1fcebe2c1335127fead51dbcd5acbd84"
+# Stock 2.0.0 before the bundled stage completion contract was declared.
+_FORK_200 = "a61ed36e7e2a163321dbce93be244194690d0fae5d2de664432e323963607802"
 
 
 def _digest(content: bytes) -> str:
@@ -119,7 +121,7 @@ def install_speckit(
             definition.id != "speckit"
             or info.get("id") != definition.id
             or info.get("version") != definition.version
-            or info.get("sha256") != canonical
+            or info.get("bundled_sha256", info.get("sha256")) != canonical
         ):
             raise ValueError(
                 "Packaged speckit workflow ID, version or SHA-256 differs from its catalog"
@@ -150,7 +152,8 @@ def install_speckit(
                 and installed_digest == canonical
             )
             legacy = (
-                recorded.get("version") == "1.0.2" and installed_digest == _UPSTREAM_102
+                (recorded.get("version"), installed_digest)
+                in {("1.0.2", _UPSTREAM_102), ("2.0.0", _FORK_200)}
             )
             if (
                 recorded.get("source") != "bundled"

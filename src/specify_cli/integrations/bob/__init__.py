@@ -355,6 +355,15 @@ class BobIntegration(IntegrationBase):
         """
         return _BobSkillsHelper().post_process_skill_content(content)
 
+    def core_command_paths(
+        self, project_root: Path, name: str, parsed_options: dict[str, Any] | None
+    ) -> tuple[Path, ...]:
+        renderer = (
+            _BobSkillsHelper() if self.is_skills_mode(parsed_options, project_root)
+            else _BobMarkdownHelper()
+        )
+        return renderer.core_command_paths(project_root, name, parsed_options)
+
     def setup(
         self,
         project_root: Path,

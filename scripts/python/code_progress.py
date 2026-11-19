@@ -83,6 +83,17 @@ def read_state(path: Path) -> dict | None:
         raise ValueError(
             "Invalid code-progress.json; preserve it and recover from the last valid copy"
         )
+    inputs = {}
+    for name, content_hash in value["inputs"].items():
+        # Older Windows ledgers used backslashes throughout. A backslash in
+        # an already slash-delimited POSIX path can be a literal filename byte.
+        key = name if "/" in name else name.replace("\\", "/")
+        if key in inputs:
+            raise ValueError(
+                f"Ambiguous progress input paths for {key}; preserve the ledger for recovery"
+            )
+        inputs[key] = content_hash
+    value["inputs"] = inputs
     for key, item in value["tasks"].items():
         if (
             not isinstance(item, dict)
@@ -370,12 +381,21 @@ def operate(action: str, task_id: str | None = None, note: str = "") -> dict:
                             f"Task {task_id} shares files with active task {other}"
                         )
                 if entry["status"] != "IN_PROGRESS":
+                    if statuses[task_id] == "CODE_COMPLETE":
+                        raise ValueError(f"Task {task_id} is already CODE_COMPLETE")
+                    if entry["status"] == "NEEDS_REVIEW" and entry["attempts"]:
+                        # A design/task revision resets attempts during sync.
+                        # Here a completed cycle was invalidated by source or dependencies.
+                        prior = deepcopy(entry)
+                        prior["status"] = "CODE_COMPLETE"
+                        state["history"].append(
+                            {"at": now(), "inputs": inputs, "tasks": {task_id: prior}}
+                        )
+                        entry["attempts"] = 0
                     if entry["attempts"] >= MAX_ATTEMPTS:
                         raise ValueError(
                             f"Task {task_id} exhausted {MAX_ATTEMPTS} attempts; record the obstacle and continue independent tasks"
                         )
-                    if statuses[task_id] == "CODE_COMPLETE":
-                        raise ValueError(f"Task {task_id} is already CODE_COMPLETE")
                     entry["attempts"] += 1
                     if entry["status"] != "BLOCKED":
                         entry["starting_hashes"] = {
@@ -452,7 +472,7 @@ def status(selected: dict, definitions: dict, state: dict | None) -> dict:
         if statuses[key] == "CODE_COMPLETE":
             continue
         if (
-            statuses[key] != "IN_PROGRESS"
+            statuses[key] not in {"IN_PROGRESS", "NEEDS_REVIEW"}
             and state["tasks"][key]["attempts"] >= MAX_ATTEMPTS
         ):
             continue

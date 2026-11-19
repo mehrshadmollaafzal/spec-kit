@@ -83,6 +83,9 @@ class StepContext:
     #: Source directory of the workflow definition file.
     workflow_dir: str | None = None
 
+    #: Apply the bundled Spec Kit stage completion contract in this scope.
+    speckit_completion: bool = field(default=False, kw_only=True)
+
     #: Workflow-level default reasoning effort.
     default_reasoning_effort: str | None = None
 

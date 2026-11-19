@@ -231,8 +231,8 @@ fi
 TASKS="$FEATURE_DIR/tasks.md"
 if [[ -f "$FEATURE_DIR/tasks-code.md" ]]; then TASKS="$FEATURE_DIR/tasks-code.md"; fi
 if [[ ! -f "$TASKS" ]]; then
-    echo "ERROR: tasks.md not found in $FEATURE_DIR" >&2
-    echo "Run the Spec Kit tasks command first to create the task list." >&2
+    echo "ERROR: No task list found in $FEATURE_DIR (expected tasks-code.md or legacy tasks.md)" >&2
+    echo "Run the Spec Kit taskscode command first to create the task list." >&2
     exit 1
 fi
 

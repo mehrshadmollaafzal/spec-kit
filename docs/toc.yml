@@ -18,13 +18,15 @@
 # Getting started section
 - name: Getting Started
   items:
+    - name: Eleven command workflow
+      href: fork-workflow.md
     - name: Installation
       href: installation.md
     - name: Spec Kit's Agentic SDLC
       href: guides/agentic-sdlc.md
     - name: Spec-Driven Development
       href: quickstart.md
-    - name: SDD Command Reference
+    - name: Upstream SDD Command Reference (archive)
       href: reference/agentic-sdd.md
     - name: Bug Fixing
       href: guides/bugfix.md
@@ -38,11 +40,11 @@
       href: upgrade.md
     - name: Install uv
       href: install/uv.md
-    - name: Install from PyPI
+    - name: Upstream PyPI installation (archive)
       href: install/pypi.md
-    - name: Install with pipx
+    - name: Upstream pipx installation (archive)
       href: install/pipx.md
-    - name: One-time Usage (uvx)
+    - name: Upstream one-time usage (archive)
       href: install/one-time.md
     - name: Enterprise / Air-Gapped
       href: install/air-gapped.md

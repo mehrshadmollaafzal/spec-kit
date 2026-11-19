@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import shutil
 import uuid
 from pathlib import Path
@@ -14,6 +15,16 @@ from specify_cli.integrations.base import (
     requested_dispatch_settings,
 )
 from specify_cli.integrations.installer import project_dispatch
+from specify_cli.workflows._speckit_contract import (
+    FEATURE_OUTPUTS,
+    SHARED_OUTPUTS,
+    bound_feature,
+    feature_environment,
+    feature_from_specify,
+    principal_output,
+    verify_coding_status,
+    verify_legacy_prerequisites,
+)
 from specify_cli.workflows.base import StepBase, StepContext, StepResult, StepStatus
 from specify_cli.workflows.expressions import evaluate_expression
 from specify_cli.workflows.step._capture import (
@@ -195,6 +206,33 @@ class CommandStep(StepBase):
         nonce = uuid.uuid4().hex if config.get("verify_completion") else None
         if nonce:
             args_str += completion_prompt(nonce)
+        stage = command.removeprefix("speckit.")
+        bundled = context.speckit_completion and (
+            stage in FEATURE_OUTPUTS or stage in SHARED_OUTPUTS or stage == "specify"
+        )
+        if bundled and nonce is None:
+            return StepResult(status=StepStatus.FAILED, error=f"{command} requires verify_completion: true")
+        root = Path(context.project_root).resolve() if bundled and context.project_root else None
+        feature = None
+        dispatch_env: dict[str, str] | None = None
+        if bundled and root is not None:
+            if stage in FEATURE_OUTPUTS or stage in {"architecture", "environment"}:
+                try:
+                    feature, legacy = bound_feature(root, context)
+                    if legacy:
+                        verify_legacy_prerequisites(root, feature, context, stage)
+                except ValueError as exc:
+                    return StepResult(status=StepStatus.FAILED, error=str(exc))
+                dispatch_env = feature_environment(root, feature)
+                args_str += (
+                    f" This run is bound to feature directory {json.dumps(feature, ensure_ascii=False)}. "
+                    "Keep the inherited feature environment set for every helper call."
+                )
+            if stage == "specify":
+                args_str += " Report the selected feature's spec.md so the run can bind to it."
+        required = principal_output(stage, feature) if bundled else None
+        if required is not None:
+            args_str += f" Include the artifact {json.dumps(required, ensure_ascii=False)}."
         output: dict[str, Any] = {
             "command": command,
             "integration": integration,
@@ -220,6 +258,7 @@ class CommandStep(StepBase):
                 integration_options,
                 capture_max_bytes=capture_max_bytes,
                 timeout=timeout,
+                **({"env": dispatch_env} if dispatch_env is not None else {}),
                 **dispatch.settings,
             )
         except DispatchSettingsError as exc:
@@ -265,7 +304,15 @@ class CommandStep(StepBase):
                 )
             if nonce:
                 try:
-                    output["completion"] = verify_completion(dispatch_result, nonce, context.project_root)
+                    receipt = verify_completion(dispatch_result, nonce, context.project_root)
+                    artifacts = receipt["artifacts"]
+                    if required is not None and required not in artifacts:
+                        raise ValueError(f"Completion receipt must include {required}")
+                    if bundled and stage == "specify" and root is not None:
+                        output["feature_directory"] = feature_from_specify(root, artifacts)
+                    if stage == "impcode" and root is not None and feature is not None:
+                        verify_coding_status(root, feature)
+                    output["completion"] = receipt
                 except ValueError as exc:
                     return StepResult(status=StepStatus.FAILED, output=output, error=str(exc))
             return StepResult(
@@ -304,6 +351,7 @@ class CommandStep(StepBase):
         timeout: float = _DEFAULT_CAPTURE_TIMEOUT,
         reasoning_effort: str | None = None,
         context_size: str | None = None,
+        env: dict[str, str] | None = None,
     ) -> dict[str, Any] | None:
         """Invoke *command* by name through the integration CLI.
 
@@ -379,14 +427,19 @@ class CommandStep(StepBase):
             # the signature from before these keywords existed; calling it
             # would raise a raw TypeError and take down the run.
             parameters = inspect.signature(impl.dispatch_command).parameters
-            if not any(
+            accepts_kwargs = any(
                 parameter.kind is inspect.Parameter.VAR_KEYWORD
                 for parameter in parameters.values()
-            ) and not all(name in parameters for name in capture_kwargs):
+            )
+            if not accepts_kwargs and not all(name in parameters for name in capture_kwargs):
                 raise ValueError(
                     f"integration {integration_key!r} does not support "
                     f"'capture: true'."
                 )
+            if env is not None:
+                if not accepts_kwargs and "env" not in parameters:
+                    raise ValueError(f"integration {integration_key!r} cannot dispatch with a bound feature environment")
+                capture_kwargs["env"] = env
 
         try:
             return impl.dispatch_command(

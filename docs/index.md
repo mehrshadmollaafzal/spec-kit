@@ -8,7 +8,7 @@
 
 Spec Kit gives your coding agent structured processes that keep intent and evidence ahead of implementation. Start with Spec-Driven Development (SDD), bug fixing, or idea assessment. Run a process step by step, automate it, or [shape one of your own](how-to/customization.md) — including processes beyond software development.
 
-<a href="installation.md" class="btn btn-primary btn-lg">Install Spec Kit</a>&nbsp;
+<a href="fork-workflow.md#install-from-this-fork" class="btn btn-primary btn-lg">Install this fork</a>&nbsp;
 <a href="#choose-your-process" class="btn btn-outline-primary btn-lg">Choose your process</a>
 
 </div>
@@ -19,7 +19,7 @@ Spec Kit gives your coding agent structured processes that keep intent and evide
 
 | What you need | Start here | What you get | Command reference |
 | --- | --- | --- | --- |
-| Build a feature or application | [Spec-Driven Development](quickstart.md) | A specification carried through planning, implementation, and convergence | [Agentic SDD](reference/agentic-sdd.md) |
+| Build a feature or application | [Fork quickstart](quickstart.md) | A specification carried through design, coding, optional deployment, and testing | [Eleven command workflow](fork-workflow.md) |
 | Diagnose and repair broken behavior | [Bug fixing](guides/bugfix.md) | An assessed cause, scoped fix, and recorded verification | [Agentic Bug Fix](reference/agentic-bugfix.md) |
 | Decide whether an idea deserves investment | [Idea assessment](guides/assessment.md) | An evidence-backed go, clarify, or stop decision | [Agentic Idea Assessment](reference/agentic-assessment.md) |
 
@@ -57,7 +57,8 @@ gates.
 
 ### Spec-driven by default
 
-The core SDD process ships ready to use: **Specify → Plan → Tasks → Implement → Converge**.
+The core SDD process covers requirements, shared architecture and environment, feature
+design, coding, optional deployment, and testing.
 
 Define what to build before building it. Rich templates, quality checklists, and cross-artifact analysis come out of the box. Each phase produces a Markdown artifact that feeds the next — giving your AI coding agent structured context instead of ad-hoc prompts.
 
@@ -169,7 +170,7 @@ Community extensions like Quality Gates and Architecture Guard add policy checks
   </a>
   <a href="quickstart.md" class="nav-card">
     <strong>Spec-Driven Development</strong>
-    <span>Define, plan, implement, and converge on a feature</span>
+    <span>Define and design a feature, then code, deploy when needed, and test</span>
   </a>
   <a href="guides/bugfix.md" class="nav-card">
     <strong>Bug Fixing</strong>
@@ -217,12 +218,7 @@ Community extensions like Quality Gates and Architecture Guard add policy checks
 
 <div class="footer-cta">
 
-```bash
-uv tool install specify-cli
-specify init my-project --integration copilot
-```
-
-Ready to start? [Choose your process](#choose-your-process).
+[Install this fork](installation.md) and [start the eleven command workflow](quickstart.md).
 
 </div>
 

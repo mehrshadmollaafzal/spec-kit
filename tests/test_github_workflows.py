@@ -506,13 +506,18 @@ git() {
         ["bash", "-e", "-o", "pipefail", "-c", stubs + script],
         cwd=tmp_path,
         env={**os.environ, "VERSION": tag, "GITHUB_TOKEN": "test-token",
+             "GITHUB_SERVER_URL": "https://github.com",
+             "GITHUB_REPOSITORY": "mehrshadmollaafzal/spec-kit",
              "GITHUB_OUTPUT": str(tmp_path / "github-output")},
         capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stderr
     assert not (tmp_path / "injected").exists()
     if step_name == "Generate release notes":
-        assert f"spec-kit.git@{tag}" in (tmp_path / "release_notes.md").read_text()
+        assert (
+            f"git+https://github.com/mehrshadmollaafzal/spec-kit.git@{tag}"
+            in (tmp_path / "release_notes.md").read_text()
+        )
     else:
         assert (tmp_path / "gh-args").read_text().splitlines()[:3] == [
             "release", "view" if step_name.startswith("Check") else "create", tag,
@@ -546,6 +551,8 @@ def test_release_workflow_simulation(
         "GIT_AUTHOR_NAME": "Release Test", "GIT_AUTHOR_EMAIL": "test@example.invalid",
         "GIT_COMMITTER_NAME": "Release Test", "GIT_COMMITTER_EMAIL": "test@example.invalid",
         "GITHUB_REF": f"refs/tags/{tag}",
+        "GITHUB_SERVER_URL": "https://github.com",
+        "GITHUB_REPOSITORY": "github/spec-kit",
         "TEST_PYTHON": sys.executable,
         "GH_CALLS": str(tmp_path / "gh-calls"),
         "RELEASE_VIEW_STATUS": "0" if release_exists else "1",
@@ -623,7 +630,7 @@ gh() {
             "--notes-file", "release_notes.md",
         ]]
         notes = notes_path.read_text()
-        assert f"spec-kit.git@{tag}" in notes
+        assert f"git+https://github.com/github/spec-kit.git@{tag}" in notes
         assert "## What's Changed" in notes
         assert f"- Release change {commit_count - 1}" in notes
         expected_count = min(commit_count, 20) if not previous_tag else commit_count - 1

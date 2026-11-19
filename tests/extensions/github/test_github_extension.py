@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -23,8 +24,9 @@ from pathlib import Path
 
 import pytest
 import yaml
+from typer.testing import CliRunner
 
-from specify_cli import _locate_bundled_extension
+from specify_cli import _locate_bundled_extension, app
 from tests.conftest import requires_bash
 from tests.parity_helpers import (
     HAS_POWERSHELL,
@@ -157,7 +159,7 @@ class TestManifest:
 
         m = ExtensionManifest(EXT_DIR / "extension.yml")
         assert m.id == "github"
-        assert m.version == "2.0.0"
+        assert m.version == "2.0.1"
         assert [c["name"] for c in m.commands] == [COMMAND_NAME]
 
     def test_manifest_does_not_restore_legacy_alias(self):
@@ -667,7 +669,7 @@ class TestResolveTasksPython:
         result = _run([sys.executable, str(PY_SCRIPT), "--json"], project)
 
         assert result.returncode == 1
-        assert "tasks.md not found" in result.stderr
+        assert "No task list found" in result.stderr
 
     def test_text_mode_survives_a_cp1252_stdout(self, tmp_path: Path):
         """Regression: U+2713 is unencodable in cp1252.
@@ -886,8 +888,8 @@ class TestResolveTasksPowerShellParity:
 
         assert ps.returncode == 1
         assert py.returncode == 1
-        assert "tasks.md not found" in ps.stderr
-        assert "tasks.md not found" in py.stderr
+        assert "No task list found" in ps.stderr
+        assert "No task list found" in py.stderr
         assert ps.stdout.strip() == ""
 
 
@@ -1012,7 +1014,7 @@ class TestResolveTasksBash:
         result = _run(["bash", str(SH_SCRIPT), "--json"], project)
 
         assert result.returncode == 1
-        assert "tasks.md not found" in result.stderr
+        assert "No task list found" in result.stderr
 
 
 # -- Override contract, across all three twins --------------------------------
@@ -1029,12 +1031,13 @@ _TWINS = [
 
 
 def _run_twin(
-    twin: str, cwd: Path, **overrides: str
+    twin: str, cwd: Path, extension_dir: Path = EXT_DIR, **overrides: str
 ) -> subprocess.CompletedProcess:
+    script = str(extension_dir / SCRIPT_TWINS[twin])
     argv = {
-        "sh": ["bash", str(SH_SCRIPT), "--json"],
-        "ps": [POWERSHELL_EXE, "-NoProfile", "-File", str(PS_SCRIPT), "-Json"],
-        "py": [sys.executable, str(PY_SCRIPT), "--json"],
+        "sh": ["bash", script, "--json"],
+        "ps": [WINDOWS_POWERSHELL or POWERSHELL_EXE, "-NoProfile", "-File", script, "-Json"],
+        "py": [sys.executable, script, "--json"],
     }[twin]
     return subprocess.run(
         argv,
@@ -1044,6 +1047,44 @@ def _run_twin(
         encoding="utf-8",
         env={**_resolver_env(), **overrides},
     )
+
+
+@pytest.mark.parametrize("twin", _TWINS)
+def test_installed_resolver_recovery_and_quickstart_use_installed_skills(tmp_path, twin):
+    project = tmp_path / "project"
+    result = CliRunner().invoke(app, [
+        "init", str(project), "--integration", "codex", "--script", twin,
+        "--extension", "github", "--ignore-agent-tools", "--non-interactive",
+    ])
+    assert result.exit_code == 0, result.output
+    skills = {
+        item.parent.name for item in (project / ".agents/skills").glob("*/SKILL.md")
+    }
+    quickstart = (PROJECT_ROOT / "docs/quickstart.md").read_text(encoding="utf-8")
+    mentioned = set(re.findall(r"[$](speckit-[a-z]+)\b", quickstart))
+    assert mentioned == skills - {"speckit-github-taskstoissues"}
+    assert len(mentioned) == 11
+
+    feature = _add_feature(project, "001-demo")
+    extension = project / ".specify/extensions/github"
+    selection = {"SPECIFY_FEATURE_DIRECTORY": feature.relative_to(project).as_posix()}
+    legacy = feature / "tasks.md"
+    legacy_content = legacy.read_bytes()
+    legacy.unlink()
+    missing = _run_twin(twin, project, extension, **selection)
+    assert missing.returncode == 1 and not missing.stdout
+    assert "Run the Spec Kit taskscode command first" in missing.stderr
+    assert "speckit-taskscode" in skills
+
+    legacy.write_bytes(legacy_content)
+    fallback = _run_twin(twin, project, extension, **selection)
+    assert fallback.returncode == 0, fallback.stderr
+    assert Path(json.loads(fallback.stdout)["TASKS"]).name == "tasks.md"
+    (feature / "tasks-code.md").write_text("# Coding tasks\n", encoding="utf-8")
+    preferred = _run_twin(twin, project, extension, **selection)
+    assert preferred.returncode == 0, preferred.stderr
+    assert Path(json.loads(preferred.stdout)["TASKS"]).name == "tasks-code.md"
+    assert legacy.read_bytes() == legacy_content
 
 
 def _add_feature(project: Path, name: str) -> Path:
@@ -1097,8 +1138,8 @@ class TestResolverPrerequisiteHints:
             ),
             (
                 "tasks.md",
-                "tasks.md not found",
-                "Run the Spec Kit tasks command first to create the task list.",
+                "No task list found",
+                "Run the Spec Kit taskscode command first to create the task list.",
             ),
         ],
         ids=["missing-feature", "missing-plan", "missing-tasks"],

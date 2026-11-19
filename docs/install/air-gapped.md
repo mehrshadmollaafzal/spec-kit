@@ -8,7 +8,7 @@ If your environment blocks access to PyPI or GitHub, you can create a portable w
 
 ```bash
 # Clone the repository
-git clone https://github.com/github/spec-kit.git
+git clone --branch codex/eleven-command-workflow https://github.com/mehrshadmollaafzal/spec-kit.git
 cd spec-kit
 
 # Build the wheel

@@ -7,18 +7,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from pathlib import Path, PurePosixPath
 
 from common import get_feature_paths
 
 
+def canonical_feature_directory(root: Path, candidate: Path) -> Path:
+    """Resolve a feature destination without creating it or the pointer."""
+    feature = (root / candidate).resolve()
+    if not feature.is_relative_to(root) or feature == root:
+        raise ValueError("The feature directory must be inside the project")
+    return feature
+
+
 def paths() -> dict[str, Path]:
     selected = get_feature_paths(no_persist=True, script_file=Path(__file__))
     root = selected.repo_root.resolve()
-    feature = selected.feature_dir.resolve()
-    if not feature.is_relative_to(root) or feature == root:
-        raise ValueError("The feature directory must be inside the project")
+    feature = canonical_feature_directory(root, selected.feature_dir)
     return {
         "REPO_ROOT": root,
         "FEATURE_DIR": feature,
@@ -130,7 +137,9 @@ def environment(selected: dict[str, Path]) -> dict[str, dict]:
     return assets
 
 
-def source_path(root: Path, value: str) -> Path:
+def source_path(
+    root: Path, value: str, *, protected_paths: tuple[Path, ...] = ()
+) -> Path:
     if not isinstance(value, str) or not value or "\\" in value or ":" in value:
         raise ValueError("Task file paths must be project-relative POSIX paths")
     relative = PurePosixPath(value)
@@ -138,6 +147,9 @@ def source_path(root: Path, value: str) -> Path:
         raise ValueError(f"Use a concrete, normalized task file path: {value}")
     if relative.is_absolute() or ".." in relative.parts or not relative.parts:
         raise ValueError(f"Unsafe task file path: {value}")
+    # Win32 can strip trailing dots and spaces when a missing output is created.
+    if os.name == "nt" and any(part.endswith((".", " ")) for part in relative.parts):
+        raise ValueError(f"Aliased task path: {value}")
     if any(
         part.lower()
         in {
@@ -173,6 +185,8 @@ def source_path(root: Path, value: str) -> Path:
             f"Coding tasks cannot own governance, testing or deployment files: {value}"
         )
     path = root.joinpath(*relative.parts)
+    if any(path.is_relative_to(protected) for protected in protected_paths):
+        raise ValueError(f"Coding tasks cannot own workflow artifacts: {value}")
     resolved = path.resolve()
     if not resolved.is_relative_to(root):
         raise ValueError(f"Task file escapes project: {value}")
@@ -190,6 +204,14 @@ def tasks(selected: dict[str, Path]) -> dict[str, dict]:
     assets = environment(selected)
     components = architecture(selected)
     result = records(read_inventory(selected["TASKS_CODE"]).get("tasks"), "task")
+    feature = selected["FEATURE_DIR"]
+    # Apply ownership even when the feature lives outside the default specs/ tree.
+    design_paths = ("research.md", "data-model.md", "contracts", "checklists", "tasks.md", "quickstart.md")
+    protected_paths = (
+        *(path for path in selected.values() if path.parent == feature),
+        selected["CODE_PROGRESS"].with_suffix(".lock"),
+        *(feature / name for name in design_paths),
+    )
     spellings = {}
     for key, task in result.items():
         if not re.fullmatch(r"T\d{3,}", key):
@@ -237,7 +259,9 @@ def tasks(selected: dict[str, Path]) -> dict[str, dict]:
                     f"Task {key} has an incompatible deployment target: {target}"
                 )
         for name in task["files"]:
-            canonical = source_path(selected["REPO_ROOT"], name).resolve()
+            canonical = source_path(
+                selected["REPO_ROOT"], name, protected_paths=protected_paths
+            ).resolve()
             if canonical in spellings and spellings[canonical] != name:
                 raise ValueError(
                     f"Use consistent spelling for shared task file: {name}"
@@ -286,7 +310,7 @@ def fingerprints(selected: dict[str, Path]) -> dict[str, str]:
     if contracts.is_dir():
         inputs.extend(sorted(p for p in contracts.rglob("*") if p.is_file()))
     return {
-        str(p.relative_to(selected["REPO_ROOT"])): hashlib.sha256(
+        p.relative_to(selected["REPO_ROOT"]).as_posix(): hashlib.sha256(
             p.read_bytes()
         ).hexdigest()
         for p in inputs

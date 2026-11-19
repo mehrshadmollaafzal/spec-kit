@@ -467,6 +467,7 @@ class CopilotIntegration(IntegrationBase):
         capture_max_bytes: int | None = None,
         reasoning_effort: str | None = None,
         context_size: str | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         """Dispatch via ``--agent speckit.<stem>`` instead of slash-commands.
 
@@ -526,6 +527,7 @@ class CopilotIntegration(IntegrationBase):
             cli_args.extend(["--output-format", "json"])
 
         cwd = str(project_root) if project_root else None
+        env_kwargs = {"env": env} if env is not None else {}
 
         if stream:
             try:
@@ -533,6 +535,7 @@ class CopilotIntegration(IntegrationBase):
                     cli_args,
                     text=True,
                     cwd=cwd,
+                    **env_kwargs,
                 )
             except KeyboardInterrupt:
                 return {
@@ -552,6 +555,7 @@ class CopilotIntegration(IntegrationBase):
                 cwd=cwd,
                 timeout=timeout,
                 max_bytes=capture_max_bytes,
+                **env_kwargs,
             ).as_dispatch_result()
 
         result = subprocess.run(
@@ -560,6 +564,7 @@ class CopilotIntegration(IntegrationBase):
             text=True,
             cwd=cwd,
             timeout=timeout,
+            **env_kwargs,
         )
         return {
             "exit_code": result.returncode,
@@ -570,6 +575,20 @@ class CopilotIntegration(IntegrationBase):
     def command_filename(self, template_name: str) -> str:
         """Copilot commands use ``.agent.md`` extension."""
         return f"speckit.{template_name}.agent.md"
+
+    @staticmethod
+    def _prompt_path(project_root: Path, name: str) -> Path:
+        return project_root / ".github" / "prompts" / f"speckit.{name}.prompt.md"
+
+    def core_command_paths(
+        self, project_root: Path, name: str, parsed_options: dict[str, Any] | None
+    ) -> tuple[Path, ...]:
+        if self.is_skills_mode(parsed_options, project_root):
+            return _CopilotSkillsHelper().core_command_paths(project_root, name, parsed_options)
+        return (
+            *super().core_command_paths(project_root, name, parsed_options),
+            self._prompt_path(project_root, name),
+        )
 
     def stale_cleanup_exclusions(self) -> set[str]:
         """Protect ``.vscode/settings.json`` from upgrade stale-deletion.
@@ -749,13 +768,12 @@ class CopilotIntegration(IntegrationBase):
             created.append(dst_file)
 
         # 2. Generate companion .prompt.md files from the templates we just wrote
-        prompts_dir = project_root / ".github" / "prompts"
         for src_file in templates:
             cmd_name = f"speckit.{src_file.stem}"
             prompt_content = f"---\nagent: {cmd_name}\n---\n"
             prompt_file = self.write_file_and_record(
                 prompt_content,
-                prompts_dir / f"{cmd_name}.prompt.md",
+                self._prompt_path(project_root, src_file.stem),
                 project_root,
                 manifest,
             )

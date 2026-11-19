@@ -6,6 +6,7 @@ forwarders preserve established direct-import and monkeypatch boundaries.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import math
 import os
@@ -513,11 +514,28 @@ def _stage_workflow_file(
 @contextlib.contextmanager
 def _workflow_install_transaction(project_root: Path):
     """Serialize workflow file swaps with their registry updates."""
-    from ..shared_infra import _exclusive_project_lock
+    from ..shared_infra import _exclusive_project_lock, _validate_safe_shared_directory
 
-    with _exclusive_project_lock(
-        project_root, ".workflow-install.lock", context="workflow install"
-    ):
+    root = project_root.resolve()
+    # Like integration lifecycle locks, keep the stable inode outside the target
+    # so a failed init can roll back even directories it created from scratch.
+    lock_root = Path.home().resolve()
+    if (lock_root / ".specify").is_relative_to(root):
+        raise OSError("Workflow installation lock must be outside the project")
+    lock_id = hashlib.sha256(os.path.normcase(str(root)).encode()).hexdigest()
+    legacy_lock = root / ".specify/.workflow-install.lock"
+    with contextlib.ExitStack() as locks:
+        locks.enter_context(
+            _exclusive_project_lock(lock_root, f".workflow-install-{lock_id}.lock", context="workflow install")
+        )
+        try:
+            _validate_safe_shared_directory(root, legacy_lock.parent)
+        except ValueError as exc:
+            raise OSError(str(exc)) from exc
+        # Older installations may still be using their original lock. Keep that
+        # inode and honor it when present, without creating a new in-project lock.
+        if legacy_lock.exists() or legacy_lock.is_symlink():
+            locks.enter_context(_exclusive_project_lock(root, legacy_lock.name, context="workflow install"))
         yield
 
 

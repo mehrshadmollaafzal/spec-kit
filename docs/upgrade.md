@@ -10,8 +10,8 @@
 |----------------|---------|-------------|
 | **CLI Tool (recommended)** | `specify self upgrade` | Latest stable release, in place. Auto-detects whether you installed via `uv tool` or `pipx`. |
 | **CLI Tool — pin a version** | `specify self upgrade --tag vX.Y.Z[suffix]` | Upgrade to a specific release tag instead of the latest stable. Suffixes are limited to dev, alpha/beta/rc, and/or build metadata forms. |
-| **CLI Tool — manual fallback** | `uv tool install specify-cli --force --from git+https://github.com/github/spec-kit.git@vX.Y.Z` | When `specify self upgrade` isn't available (older installs) or when you want explicit control. |
-| **CLI Tool — manual fallback (pipx)** | `pipx install --force git+https://github.com/github/spec-kit.git@vX.Y.Z` | Same as above, for pipx installs. |
+| **CLI Tool — manual fallback** | `uv tool install specify-cli --force --from git+https://github.com/mehrshadmollaafzal/spec-kit.git@vX.Y.Z` | When `specify self upgrade` isn't available (older installs) or when you want explicit control. |
+| **CLI Tool — manual fallback (pipx)** | `pipx install --force git+https://github.com/mehrshadmollaafzal/spec-kit.git@vX.Y.Z` | Same as above, for pipx installs. |
 | **Project Files** | Run `specify integration upgrade <key>`, then `specify extension update` | Refresh installed integration files and extensions in your project |
 | **Both** | Run CLI upgrade, then project update | Recommended for major version updates |
 
@@ -21,9 +21,12 @@
 
 The CLI tool (`specify`) is separate from your project files. Upgrade it to get the latest features and bug fixes.
 
-If you installed from PyPI and want to keep that install route, follow the
-[PyPI upgrade instructions](install/pypi.md#upgrade). Repeating
-`uv tool install specify-cli` does not upgrade an existing installation.
+Self-upgrade checks the fork's GitHub releases. When no stable fork release is
+available, update the fork checkout and follow the
+[checkout installation instructions](fork-workflow.md#install-from-this-fork).
+
+The archived [PyPI upgrade instructions](install/pypi.md#upgrade) apply to
+upstream installations.
 
 ### Recommended: `specify self upgrade`
 
@@ -57,10 +60,10 @@ If your installed CLI is older than the release that introduced `specify self up
 
 ### If you installed with `uv tool install`
 
-Upgrade to a specific release (check [Releases](https://github.com/github/spec-kit/releases) for the latest tag):
+Upgrade to a specific release (check [Releases](https://github.com/mehrshadmollaafzal/spec-kit/releases) for the latest tag):
 
 ```bash
-uv tool install specify-cli --force --from git+https://github.com/github/spec-kit.git@vX.Y.Z
+uv tool install specify-cli --force --from git+https://github.com/mehrshadmollaafzal/spec-kit.git@vX.Y.Z
 ```
 
 ### If you use one-shot `uvx` commands
@@ -68,7 +71,7 @@ uv tool install specify-cli --force --from git+https://github.com/github/spec-ki
 Specify the desired release tag:
 
 ```bash
-uvx --from git+https://github.com/github/spec-kit.git@vX.Y.Z specify init --here --integration copilot
+uvx --from git+https://github.com/mehrshadmollaafzal/spec-kit.git@vX.Y.Z specify init --here --integration copilot
 ```
 
 `uvx` runs a temporary copy of Spec Kit for that single command. It does not update a persistent `specify` installed with `uv tool install`, `pipx`, or another tool manager. If a newer feature works through `uvx` but your local `specify` still reports an older version, upgrade the persistent CLI with the command that matches your install method.
@@ -78,7 +81,7 @@ uvx --from git+https://github.com/github/spec-kit.git@vX.Y.Z specify init --here
 Upgrade to a specific release:
 
 ```bash
-pipx install --force git+https://github.com/github/spec-kit.git@vX.Y.Z
+pipx install --force git+https://github.com/mehrshadmollaafzal/spec-kit.git@vX.Y.Z
 ```
 
 ### Verify the upgrade
@@ -490,7 +493,7 @@ If not found, reinstall:
 
 ```bash
 uv tool uninstall specify-cli
-uv tool install specify-cli --from git+https://github.com/github/spec-kit.git
+uv tool install specify-cli --from git+https://github.com/mehrshadmollaafzal/spec-kit.git
 ```
 
 ### "Do I need to run specify every time I open my project?"
@@ -557,6 +560,6 @@ Spec Kit follows semantic versioning for major releases. The CLI and project fil
 After upgrading:
 
 - **Test new slash commands:** Run `/speckit.constitution` or another command to verify everything works
-- **Review release notes:** Check [GitHub Releases](https://github.com/github/spec-kit/releases) for new features and breaking changes
+- **Review release notes:** Check [GitHub Releases](https://github.com/mehrshadmollaafzal/spec-kit/releases) for new features and breaking changes
 - **Update workflows:** If new commands were added, update your team's development workflows
 - **Check documentation:** Visit [github.io/spec-kit](https://github.github.io/spec-kit/) for updated guides

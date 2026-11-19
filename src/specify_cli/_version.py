@@ -32,12 +32,22 @@ from packaging.version import InvalidVersion, Version
 from ._download_security import MAX_JSON_METADATA_BYTES, read_response_limited
 from ._console import console
 
-GITHUB_API_LATEST = "https://api.github.com/repos/github/spec-kit/releases/latest"
+# Distribution identity belongs to the shipped CLI, independent of the project
+# where it runs or the repository settings in its environment.
+_DISTRIBUTION_REPOSITORY = "mehrshadmollaafzal/spec-kit"
+_DISTRIBUTION_URL = f"https://github.com/{_DISTRIBUTION_REPOSITORY}"
+_GITHUB_SOURCE_URL = f"git+{_DISTRIBUTION_URL}.git"
+_FORK_INSTALL_GUIDE = (
+    f"{_DISTRIBUTION_URL}/blob/codex/eleven-command-workflow/"
+    "docs/fork-workflow.md#install-from-this-fork"
+)
+GITHUB_API_LATEST = f"https://api.github.com/repos/{_DISTRIBUTION_REPOSITORY}/releases/latest"
 _RESOLUTION_FAILURE_OFFLINE = "offline or timeout"
 _RESOLUTION_FAILURE_RATE_LIMITED = (
     "rate limited (configure ~/.specify/auth.json with a GitHub token)"
 )
 _RESOLUTION_FAILURE_HTTP_PREFIX = "HTTP "
+_RESOLUTION_FAILURE_NO_RELEASE = f"{_RESOLUTION_FAILURE_HTTP_PREFIX}404"
 _RESOLUTION_FAILURE_AUTH_PREFIX = "authentication error: "
 _FAILURE_INSTALLER_MISSING = "installer-missing"
 _FAILURE_INSTALLER_INVALID = "installer-invalid"
@@ -707,7 +717,6 @@ def _detect_install_method(
     return method
 
 
-_GITHUB_SOURCE_URL = "git+https://github.com/github/spec-kit.git"
 _MANUAL_TAG_PLACEHOLDER = "vX.Y.Z"
 
 
@@ -718,7 +727,17 @@ def _source_spec(target_tag: str | None) -> str:
 
 def _manual_source_spec(target_tag: str | None) -> str:
     """Build a stable-release-oriented source spec for manual guidance."""
-    return f"{_GITHUB_SOURCE_URL}@{target_tag or _MANUAL_TAG_PLACEHOLDER}"
+    return _source_spec(target_tag or _MANUAL_TAG_PLACEHOLDER)
+
+
+def _emit_release_install_guidance(failure_reason: str) -> None:
+    if failure_reason == _RESOLUTION_FAILURE_NO_RELEASE:
+        console.print(
+            "No stable release is available from the fork. "
+            "Install from the fork checkout using this guide:",
+            soft_wrap=True,
+        )
+        console.print(f"  {_FORK_INSTALL_GUIDE}", soft_wrap=True)
 
 
 def _manual_tag_or_placeholder(tag: str | None) -> str | None:
@@ -1136,22 +1155,22 @@ def _rollback_hint(plan: _UpgradePlan) -> str:
     if plan.pre_upgrade_snapshot == "unknown":
         return (
             "Could not determine the previous version; "
-            "reinstall manually from: https://github.com/github/spec-kit/releases"
+            f"reinstall manually from: {_DISTRIBUTION_URL}/releases"
         )
     rollback_tag = _stable_release_tag_for_version(plan.pre_upgrade_snapshot)
     if rollback_tag is None:
         return (
             "Previous version was not an exact stable release tag; "
-            "reinstall manually from: https://github.com/github/spec-kit/releases"
+            f"reinstall manually from: {_DISTRIBUTION_URL}/releases"
         )
     if plan.method == _InstallMethod.PIPX:
         return (
             f"To pin back to the previous version: pipx install --force "
-            f"git+https://github.com/github/spec-kit.git@{rollback_tag}"
+            f"{_source_spec(rollback_tag)}"
         )
     return (
         f"To pin back to the previous version: uv tool install specify-cli --force "
-        f"--from git+https://github.com/github/spec-kit.git@{rollback_tag}"
+        f"--from {_source_spec(rollback_tag)}"
     )
 
 
@@ -1171,6 +1190,7 @@ def _emit_failure(
         ))
     ):
         console.print(f"Upgrade aborted: {category}", soft_wrap=True)
+        _emit_release_install_guidance(category)
         return
 
     if category == _FAILURE_INSTALLER_MISSING:

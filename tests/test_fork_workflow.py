@@ -104,14 +104,17 @@ def project(tmp_path):
     return root, feature
 
 
-def invoke(project, helper, *args, shell="python"):
-    root, _ = project
+def invoke(project, helper, *args, shell="python", use_pointer=False):
+    root, feature = project
     env = {
         **os.environ,
         "SPECIFY_INIT_DIR": str(root),
-        "SPECIFY_FEATURE_DIRECTORY": "specs/001-feature",
+        "SPECIFY_FEATURE_DIRECTORY": feature.relative_to(root).as_posix(),
         "SPECKIT_PYTHON_EXECUTABLE": sys.executable,
     }
+    if use_pointer:
+        for key in ("SPECIFY_FEATURE_DIRECTORY", "SPECIFY_FEATURE"):
+            env.pop(key, None)
     if shell == "python":
         cmd = [
             sys.executable,
@@ -255,6 +258,97 @@ def test_external_source_change_requires_review_without_status_writes(project):
     assert (project[1] / "code-progress.json").read_bytes() == before
 
 
+def test_schema_one_windows_input_keys_preserve_completion_and_detect_changes(project):
+    progress(project, "sync")
+    progress(project, "start", "--task", "T001")
+    output(project, "src/api.py")
+    completed = progress(project, "complete", "--task", "T001", "--note", "written")
+    ledger = project[1] / "code-progress.json"
+    old = json.loads(ledger.read_bytes())
+    portable_inputs = {
+        key.replace("\\", "/"): value for key, value in old["inputs"].items()
+    }
+    assert old["inputs"] == portable_inputs
+    old["inputs"] = {
+        key.replace("/", "\\"): value for key, value in portable_inputs.items()
+    }
+    ledger.write_text(json.dumps(old), encoding="utf-8")
+    before = ledger.read_bytes()
+
+    assert progress(project, "status") == completed
+    assert ledger.read_bytes() == before
+    assert progress(project, "sync") == completed
+    synced = json.loads(ledger.read_bytes())
+    assert synced["inputs"] == portable_inputs
+    assert synced["history"] == old["history"]
+
+    (project[1] / "plan.md").write_text("# Changed design", encoding="utf-8")
+    result = invoke(project, "code_progress", "status")
+    assert (
+        result.returncode == 1 and "Design or task definitions changed" in result.stderr
+    )
+    assert progress(project, "sync")["tasks"]["T001"]["status"] == "NEEDS_REVIEW"
+
+
+def test_schema_one_rejects_ambiguous_input_key_aliases(project):
+    progress(project, "sync")
+    ledger = project[1] / "code-progress.json"
+    state = json.loads(ledger.read_bytes())
+    key, value = next(iter(state["inputs"].items()))
+    state["inputs"].update(
+        {key.replace("\\", "/"): value, key.replace("/", "\\"): value}
+    )
+    ledger.write_text(json.dumps(state), encoding="utf-8")
+    before = ledger.read_bytes()
+
+    for action in ("status", "sync"):
+        result = invoke(project, "code_progress", action)
+        assert (
+            result.returncode == 1 and "Ambiguous progress input paths" in result.stderr
+        )
+        assert ledger.read_bytes() == before
+
+
+def test_completed_source_reviews_get_fresh_attempts_and_preserve_prior_evidence(project):
+    progress(project, "sync")
+    for _ in range(2):
+        progress(project, "start", "--task", "T001")
+        progress(project, "block", "--task", "T001", "--note", "prior obstacle")
+    progress(project, "start", "--task", "T001")
+    output(project, "src/api.py")
+    completed = progress(project, "complete", "--task", "T001", "--note", "written")
+    assert completed["tasks"]["T001"]["attempts"] == 3
+    prior_reviews = [completed["tasks"]["T001"]]
+    source = project[0] / "src/api.py"
+
+    for revision in range(2, 6):
+        source.write_text(f"value = {revision}\n", encoding="utf-8")
+        # Exercise both a stored NEEDS_REVIEW and a read-only invalidation.
+        status = progress(project, "sync" if revision == 2 else "status")
+        assert status["tasks"]["T001"]["status"] == "NEEDS_REVIEW"
+        assert status["ready"] == ["T001", "T003"]
+        started = progress(project, "start", "--task", "T001")
+        assert started["tasks"]["T001"]["attempts"] == 1
+        completed = progress(
+            project, "complete", "--task", "T001", "--note", f"reviewed revision {revision}"
+        )
+        assert completed["ready"] == ["T002", "T003"]
+        prior_reviews.append(completed["tasks"]["T001"])
+
+    source.write_text("value = 6\n", encoding="utf-8")
+    for attempt in range(1, 4):
+        started = progress(project, "start", "--task", "T001")
+        assert started["tasks"]["T001"]["attempts"] == attempt
+        progress(project, "block", "--task", "T001", "--note", "review obstacle")
+    source.write_text("value = 7\n", encoding="utf-8")
+    assert progress(project, "sync")["ready"] == ["T003"]
+    result = invoke(project, "code_progress", "start", "--task", "T001")
+    assert result.returncode == 1 and "exhausted" in result.stderr
+    state = json.loads((project[1] / "code-progress.json").read_bytes())
+    for review in prior_reviews:
+        assert any(item["tasks"].get("T001") == review for item in state["history"])
+
+
 def test_task_regeneration_preserves_work_and_rejects_retired_id_reuse(project):
     progress(project, "sync")
     path = project[1] / "tasks-code.md"
@@ -379,6 +473,44 @@ def test_invalid_tasks_are_rejected_without_state_mutation(project, problem):
     assert (project[1] / "code-progress.json").read_bytes() == before
     # Analyze still receives paths so it can report invalid task inventories.
     assert invoke(project, "workflow_context", "analyze").returncode == 0
+
+
+@pytest.mark.parametrize(
+    ("shell", "encoding"),
+    [("python", "utf-8"), ("python", "utf-8-sig"),
+     ("powershell", "utf-8"), ("powershell", "utf-8-sig")],
+)
+def test_context_resolves_persisted_feature_with_or_without_bom(project, shell, encoding):
+    root, feature = project
+    pointer = root / ".specify/feature.json"
+    selection = json.dumps({"feature_directory": feature.relative_to(root).as_posix()})
+    if shell == "powershell" and encoding == "utf-8-sig":
+        powershell = shutil.which("powershell.exe") if os.name == "nt" else None
+        if not powershell:
+            pytest.skip("Native Windows PowerShell 5.1 unavailable")
+        written = subprocess.run(
+            [powershell, "-NoProfile", "-Command",
+             "if ($PSVersionTable.PSVersion.ToString() -notlike '5.1.*') { exit 2 }; "
+             "$env:SPECKIT_TEST_FEATURE_JSON | Set-Content -LiteralPath "
+             "$env:SPECKIT_TEST_FEATURE_POINTER -Encoding UTF8"],
+            cwd=root, env={
+                **os.environ, "SPECKIT_TEST_FEATURE_JSON": selection,
+                "SPECKIT_TEST_FEATURE_POINTER": str(pointer),
+            },
+            capture_output=True, check=False,
+        )
+        assert written.returncode == 0, written.stderr
+    else:
+        pointer.write_text(selection, encoding=encoding)
+    before = pointer.read_bytes()
+    assert before.startswith(bytes.fromhex("EF BB BF")) == (encoding == "utf-8-sig")
+
+    result = invoke(project, "workflow_context", "architecture", "--json",
+                    shell=shell, use_pointer=True)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["FEATURE_DIR"] == str(feature)
+    assert pointer.read_bytes() == before
 
 
 @pytest.mark.parametrize("shell", ["python", "powershell", "bash"])
@@ -698,6 +830,8 @@ def test_delete_records_absence(project):
         "/absolute",
         "C:/escape",
         ".specify/memory/a",
+        "specs/001-feature/plan.md",
+        "specs/001-feature/contracts/api.json",
         "tests/unit.py",
         "src/./api.py",
     ],
@@ -707,6 +841,76 @@ def test_deletion_endpoints_obey_source_policy(project, bad):
     data["tasks"][0].update(files=[bad, "src/new.py"], delete_files=[bad])
     inventory(path, data)
     assert invoke(project, "code_progress", "validate").returncode == 1
+
+
+@pytest.fixture
+def custom_feature(project):
+    root, standard = project
+    feature = root / "features/login"
+    feature.parent.mkdir()
+    standard.rename(feature)
+    return root, feature
+
+
+@pytest.mark.parametrize(
+    "artifact,operation",
+    [
+        ("plan.md", "output"),
+        ("spec.md", "rename-source"),
+        ("analysis.md", "rename-destination"),
+        ("contracts/api/schema.json", "delete"),
+        ("checklists/requirements.md", "output"),
+        ("code-progress.json", "output"),
+        ("code-progress.lock", "delete"),
+        pytest.param(
+            "analysis.md.", "rename-destination", id="windows-trailing-dot",
+            marks=pytest.mark.skipif(os.name != "nt", reason="Windows path alias"),
+        ),
+        pytest.param(
+            "contracts /api/schema.json", "delete", id="windows-trailing-space",
+            marks=pytest.mark.skipif(os.name != "nt", reason="Windows path alias"),
+        ),
+    ],
+)
+def test_custom_feature_artifacts_cannot_be_coding_endpoints(custom_feature, artifact, operation):
+    root, feature = custom_feature
+    path, data = task_inventory(custom_feature)
+    endpoint = (feature / artifact).relative_to(root).as_posix()
+    task = data["tasks"][0]
+    if operation == "rename-destination":
+        task.update(files=["src/api.py", endpoint], delete_files=["src/api.py"])
+    elif operation == "rename-source":
+        task.update(files=[endpoint, "src/api.py"], delete_files=[endpoint])
+    elif operation == "delete":
+        task.update(files=[endpoint], delete_files=[endpoint])
+    else:
+        task.update(files=[endpoint])
+    inventory(path, data)
+    for action in ("validate", "sync"):
+        result = invoke(custom_feature, "code_progress", action)
+        assert result.returncode == 1 and endpoint in result.stderr
+    assert not (feature / "code-progress.json").exists()
+    assert not (feature / "code-progress.lock").exists()
+
+
+@pytest.mark.parametrize("shell", ["python", "powershell", "bash"])
+def test_custom_layout_allows_source_beside_feature_artifacts(custom_feature, shell):
+    root, feature = custom_feature
+    path, data = task_inventory(custom_feature)
+    source = (feature / "src/api.py").relative_to(root).as_posix()
+    task = data["tasks"][0]
+    task["files"] = [source]
+    data["tasks"] = [task]
+    inventory(path, data)
+    result = invoke(custom_feature, "code_progress", "sync", shell=shell)
+    assert result.returncode == 0, result.stderr
+    progress(custom_feature, "start", "--task", "T001")
+    output(custom_feature, source)
+    result = invoke(
+        custom_feature, "code_progress", "complete", "--task", "T001", "--note", "Implemented API", shell=shell
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["code_complete"] is True
 
 
 def test_deletion_requires_owned_path_and_serializes_both_endpoints(project):

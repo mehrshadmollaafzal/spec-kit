@@ -1,4 +1,5 @@
 schema_version: '1.0'
+completion_contract: speckit
 workflow:
   id: speckit
   name: Full SDD Cycle

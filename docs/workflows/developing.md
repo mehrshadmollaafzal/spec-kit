@@ -34,12 +34,22 @@ Choose `timeout` and `capture_max_bytes` for the expected work. A blocked clarif
 needs its missing answer supplied before resuming. Receipts verify reported completion
 and output identity, not semantic correctness or file-ownership enforcement.
 
+The bundled workflow also declares `completion_contract: speckit`. The runner binds
+its verified specification to the run and uses that feature for subsequent commands.
+It checks the principal output of each stage and verifies the coding ledger before
+advancing past `impcode`.
+
+The required specify artifact is `spec.md` with either core specify or the Lean
+preset. Core specify also creates a requirements checklist. Clarify revalidates
+an existing checklist, and a missing checklist does not block Lean.
+
 ## Bundled SDD example
 
 Workflows are defined in YAML files. Here is the built-in **Full SDD Cycle** workflow that ships with Spec Kit:
 
 ```yaml
 schema_version: '1.0'
+completion_contract: speckit
 workflow:
   id: speckit
   name: Full SDD Cycle

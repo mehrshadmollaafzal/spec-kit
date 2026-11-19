@@ -4,7 +4,7 @@ preset:
   id: "lean"
   name: "Lean Workflow"
   version: "2.0.0"
-  description: "Lean specification and constitution; fork execution contracts remain authoritative"
+  description: "Concise constitution and single-artifact specification for the eleven command workflow"
   author: "github"
   repository: "https://github.com/github/spec-kit"
   license: "MIT"

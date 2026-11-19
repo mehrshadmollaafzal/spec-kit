@@ -9,9 +9,9 @@ handoffs:
     prompt: Clarify specification requirements
     send: true
 scripts:
-  sh: scripts/bash/resolve-template.sh spec-template --json
-  ps: scripts/powershell/resolve-template.ps1 spec-template -Json
-  py: scripts/python/resolve_template.py spec-template --json
+  sh: scripts/bash/workflow.sh context specify --json
+  ps: scripts/powershell/workflow.ps1 context specify --json
+  py: scripts/python/workflow_context.py specify --json
 ---
 
 ## User Input
@@ -90,7 +90,7 @@ Given that feature description, do this:
    Specs live under the default `specs/` directory unless the user explicitly provides `SPECIFY_FEATURE_DIRECTORY`.
 
    **Resolution order for `SPECIFY_FEATURE_DIRECTORY`**:
-   1. If the user explicitly provided `SPECIFY_FEATURE_DIRECTORY` (e.g., via environment variable, argument, or configuration), use it as-is
+   1. If the user explicitly provided `SPECIFY_FEATURE_DIRECTORY` (e.g., via environment variable, argument, or configuration), use it as the candidate directory
    2. Otherwise, auto-generate it under `specs/`:
       - Check `.specify/init-options.json` for `feature_numbering` (preferred) or `branch_numbering` (deprecated, migration only — will be removed in a future release)
       - If `"timestamp"`: prefix is `YYYYMMDD-HHMMSS` (current timestamp)
@@ -100,18 +100,11 @@ Given that feature description, do this:
       - If `branch_numbering` was used (and `feature_numbering` was absent), emit a one-line warning: "⚠️ `branch_numbering` in init-options.json is deprecated. Rename to `feature_numbering`."
 
    **Create the directory and spec file**:
-   - Run `{SCRIPT}` from the repository root and parse `TEMPLATE_CONTENT` as the active `spec-template`. The shared resolver composes project overrides, preset layers, and extension layers over the core template, including `append`, `prepend`, and `wrap` strategies. If it fails, stop and report the resolution error; do not continue with only one contributing template layer.
-   - `mkdir -p SPECIFY_FEATURE_DIRECTORY`
-   - Write `TEMPLATE_CONTENT` to `SPECIFY_FEATURE_DIRECTORY/spec.md` as the starting point. Do not copy a template file from disk instead: when a preset composes `spec-template`, no single file holds the full template.
-   - Set `SPEC_FILE` to `SPECIFY_FEATURE_DIRECTORY/spec.md`
-   - Persist the resolved path to `.specify/feature.json`:
-     ```json
-     {
-       "feature_directory": "<resolved feature dir>"
-     }
-     ```
-     Write the actual resolved directory path value (for example, `specs/003-user-auth`), not the literal string `SPECIFY_FEATURE_DIRECTORY`.
-     This allows downstream commands (`__SPECKIT_COMMAND_ARCHITECTURE__`, `__SPECKIT_COMMAND_TASKSCODE__`, etc.) to locate the feature directory without relying on git branch name conventions.
+   - Before creating the directory, writing any feature artifacts, or changing `.specify/feature.json`, run `{SCRIPT}` from the repository root with `--feature-directory "<candidate directory>"`. Pass the candidate as one argument in the current shell.
+   - If validation fails, stop and report the error. For a destination outside the project, request an in-project path such as `specs/003-user-auth`. Move existing external feature artifacts deliberately before selecting them in this workflow.
+   - On success, use `FEATURE_DIR` as the absolute directory and `SPEC` as `SPEC_FILE`. Keep `FEATURE_DIRECTORY` for the pointer update in step 7.
+   - Parse `TEMPLATE_CONTENT` as the active `spec-template`. The shared resolver composes project overrides, preset layers, and extension layers over the core template, including `append`, `prepend`, and `wrap` strategies. If it fails, stop and report the resolution error; do not continue with only one contributing template layer.
+   - Create `FEATURE_DIR`. Use `TEMPLATE_CONTENT` as the starting point for the spec. Do not copy a template file from disk instead: when a preset composes `spec-template`, no single file holds the full template.
 
    **IMPORTANT**:
    - You must only create one feature per `__SPECKIT_COMMAND_SPECIFY__` invocation
@@ -147,7 +140,10 @@ Given that feature description, do this:
     7. Identify Key Entities (if data involved)
     8. Return: SUCCESS (spec ready for planning)
 
-7. Write the specification to SPEC_FILE using the template structure, replacing placeholders with concrete details derived from the feature description (arguments) while preserving section order and headings.
+7. Write the specification to `SPEC_FILE` using the template structure, replacing placeholders with concrete details derived from the feature description (arguments) while preserving section order and headings. After the specification is written, persist the helper's actual `FEATURE_DIRECTORY` value in `.specify/feature.json` so downstream commands can locate this feature:
+   ```json
+   {"feature_directory": "<FEATURE_DIRECTORY value>"}
+   ```
 
 8. **Specification Quality Validation**: After writing the initial spec, validate it against quality criteria:
 

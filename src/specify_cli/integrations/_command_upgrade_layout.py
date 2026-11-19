@@ -4,35 +4,142 @@ from __future__ import annotations
 
 import json
 from pathlib import Path, PurePath
+from typing import TYPE_CHECKING, Any
+
+from packaging.version import InvalidVersion, Version
+
+if TYPE_CHECKING:
+    from .base import IntegrationBase
+    from .manifest import IntegrationManifest
 
 
-def _preflight_native_skills(integration, project_root: Path, old_manifest) -> set[str]:
-    """Check the standard skills installer's inputs and return its required output paths."""
+# Hermes' inherited global layout has no per-file manifest. These are the
+# retained command slots it populated before the fork's eleven-stage rollout.
+_UPSTREAM_RETAINED_COMMANDS = frozenset({"constitution", "specify", "clarify", "plan", "analyze"})
+_UPSTREAM_RETIRED_COMMANDS = ("checklist", "converge", "implement", "tasks")
+
+
+def _legacy_hermes_manifest(version: object) -> bool:
+    if not isinstance(version, str):
+        return True
+    try:
+        return Version(version) < Version("2.0.0.dev0")
+    except InvalidVersion:
+        return True
+
+
+def _preflight_core_commands(
+    integration: IntegrationBase,
+    project_root: Path,
+    old_manifest: IntegrationManifest,
+    parsed_options: dict[str, Any] | None,
+) -> set[str]:
+    """Check bundled command destinations before any renderer writes."""
     from . import BUILTIN_INTEGRATION_KEYS
-    from .base import SkillsIntegration, _CORE_COMMAND_TEMPLATE_ORDER
+    from .base import _CORE_COMMAND_TEMPLATE_ORDER
 
-    # External package recovery has separate ownership and consent rules.
-    # Adapters with their own setup also own their layout and preflight.
-    if (
-        integration.key not in BUILTIN_INTEGRATION_KEYS
-        or type(integration).setup is not SkillsIntegration.setup
-    ):
+    # External adapters have their own declared ownership contract.
+    if integration.key not in BUILTIN_INTEGRATION_KEYS or integration.key == "none":
         return set()
-    directory = integration.skills_dest(project_root).relative_to(project_root)
+
     templates = {template.stem for template in integration.list_command_templates()}
     owned = old_manifest.files
+    global_layout = integration.key == "hermes"
+    legacy_global_layout = global_layout and _legacy_hermes_manifest(old_manifest.version)
+    if global_layout:
+        # Even a current project manifest cannot establish which projects own
+        # or still use these profile-wide legacy command slots.
+        occupied_retired_slots = [
+            path
+            for name in _UPSTREAM_RETIRED_COMMANDS
+            for path in integration.core_command_paths(project_root, name, parsed_options)
+            if path.parent.is_symlink() or path.is_symlink() or path.exists()
+        ]
+        if occupied_retired_slots:
+            paths = "\n".join(f"  {path}" for path in occupied_retired_slots)
+            raise ValueError(
+                "Retired Hermes command slots are still present in the shared profile:\n"
+                f"{paths}\n"
+                "Check whether other projects still use these skills. Move the listed skill "
+                "directories outside ~/.hermes/skills to preserve them, then retry the upgrade."
+            )
     required = set()
     for name in _CORE_COMMAND_TEMPLATE_ORDER:
-        relative = directory / f"speckit-{name}" / "SKILL.md"
         if name not in templates:
             raise ValueError(f"Missing command template for speckit-{name}")
-        if relative.as_posix() not in owned and (project_root / relative).exists():
-            raise ValueError(
-                f"Skill ownership conflict: {relative} is untracked. "
-                "Move the custom skill to a separate directory, then retry the upgrade."
-            )
-        required.add(relative.as_posix())
+        for path in integration.core_command_paths(project_root, name, parsed_options):
+            target = path.parent.resolve() / path.name
+            if global_layout:
+                relative = target.as_posix()
+                unowned = legacy_global_layout and name not in _UPSTREAM_RETAINED_COMMANDS
+            else:
+                relative = target.relative_to(project_root).as_posix()
+                unowned = relative not in owned
+                required.add(relative)
+            if unowned and (target.exists() or target.is_symlink()):
+                raise ValueError(
+                    f"Command ownership conflict: {relative} is untracked. "
+                    "Move the existing file to a separate location, then retry the upgrade."
+                )
     return required
+
+
+def _verify_core_commands(
+    project_root: Path, manifest: IntegrationManifest, required: set[str],
+) -> None:
+    """Confirm the on-disk command inventory before publishing a workflow."""
+    tracked = manifest.files
+    missing = [
+        path for path in sorted(required)
+        if path not in tracked or not (project_root / path).is_file()
+    ]
+    if missing:
+        raise ValueError(f"Missing core command files: {', '.join(missing)}")
+
+
+def _check_lean_preset(project_root: Path) -> None:
+    """Refuse to re-register the upstream Lean workflow's retired contract."""
+    from ..presets import PresetManager, PresetManifest
+
+    manager = PresetManager(project_root)
+    metadata = manager.registry.get("lean")
+    if metadata is None:
+        return
+    manifest = PresetManifest(manager.presets_dir / "lean" / "preset.yml")
+    legacy_commands = ("speckit.plan", "speckit.tasks", "speckit.implement")
+    legacy_skills = {
+        name for command in legacy_commands for name in manager._skill_names_for_command(command)
+    }
+    for field, legacy_names in (
+        ("registered_commands", legacy_commands), ("registered_skills", legacy_skills),
+    ):
+        registered = metadata.get(field, {})
+        groups = registered.values() if isinstance(registered, dict) else (registered,)
+        if any(
+            name in legacy_names
+            for names in groups if isinstance(names, list)
+            for name in names if isinstance(name, str)
+        ):
+            break
+    else:
+        if (
+            "1.0.0" not in (metadata.get("version"), manifest.version)
+            and not any(
+                template.get("type") == "command"
+                and (
+                    template.get("name") in legacy_commands
+                    or template.get("replaces") in legacy_commands
+                )
+                for template in manifest.templates
+            )
+        ):
+            return
+    raise ValueError(
+        f"Lean preset {manifest.version} conflicts with the eleven-command workflow. "
+        "Back up any customized preset sources and commands. "
+        "Run 'specify preset update lean' (or 'specify preset remove lean'), then retry the upgrade. "
+        "Review any modified generated files reported after updating the preset before using --force."
+    )
 
 
 def _manifest_tracks_skill_layout(manifest) -> bool:

@@ -100,6 +100,16 @@ class RovodevIntegration(SkillsIntegration):
     def _render_prompt_wrapper(skill_name: str) -> str:
         return f"use skill {skill_name} $ARGUMENTS\n"
 
+    @staticmethod
+    def _prompt_path(project_root: Path, skill_name: str) -> Path:
+        return project_root / ".rovodev" / "prompts" / f"{skill_name}.prompt.md"
+
+    def core_command_paths(
+        self, project_root: Path, name: str, parsed_options: dict[str, Any] | None
+    ) -> tuple[Path, ...]:
+        (skill,) = super().core_command_paths(project_root, name, parsed_options)
+        return skill, self._prompt_path(project_root, skill.parent.name)
+
     def _generate_prompt_files(
         self,
         project_root: Path,
@@ -114,9 +124,6 @@ class RovodevIntegration(SkillsIntegration):
         Returns (created_files, prompt_entries) where prompt_entries are
         dicts suitable for inclusion in ``prompts.yml``.
         """
-        prompts_dir = project_root / ".rovodev" / "prompts"
-        prompts_dir.mkdir(parents=True, exist_ok=True)
-
         created: list[Path] = []
         prompt_entries: list[dict[str, str]] = []
 
@@ -128,10 +135,9 @@ class RovodevIntegration(SkillsIntegration):
             if not skill_name:
                 continue
 
-            prompt_filename = f"{skill_name}.prompt.md"
             prompt_file = self.write_file_and_record(
                 self._render_prompt_wrapper(skill_name),
-                prompts_dir / prompt_filename,
+                self._prompt_path(project_root, skill_name),
                 project_root,
                 manifest,
             )
@@ -140,7 +146,7 @@ class RovodevIntegration(SkillsIntegration):
             prompt_entries.append({
                 "name": skill_name,
                 "description": f"Invoke {skill_name} skill",
-                "content_file": f"prompts/{prompt_filename}",
+                "content_file": f"prompts/{prompt_file.name}",
             })
 
         return created, prompt_entries

@@ -1,5 +1,9 @@
 # One-time Usage (uvx)
 
+> [!NOTE]
+> This archived page describes upstream installation. For the eleven command
+> workflow, follow [Install from this fork](../fork-workflow.md#install-from-this-fork).
+
 If you want to try Spec Kit without installing it permanently, use `uvx` to run it in an isolated environment. uv caches this disposable environment for reuse; it does not install a persistent `specify` command on your PATH.
 
 > [!NOTE]

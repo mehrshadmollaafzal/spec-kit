@@ -59,6 +59,11 @@ class HermesIntegration(SkillsIntegration):
         """Return ``~/.hermes/skills/`` — the global skills directory."""
         return Path.home() / ".hermes" / "skills"
 
+    def core_command_paths(
+        self, project_root: Path, name: str, parsed_options: dict[str, Any] | None
+    ) -> tuple[Path, ...]:
+        return (self._skill_path(self._hermes_home_skills_dir(), name),)
+
     # -- Options -----------------------------------------------------------
 
     @classmethod
@@ -120,7 +125,8 @@ class HermesIntegration(SkillsIntegration):
 
             # Derive the skill name from the template stem
             command_name = src_file.stem  # e.g. "plan"
-            skill_name = f"speckit-{command_name.replace('.', '-')}"
+            skill_file = self._skill_path(global_skills_dir, command_name)
+            skill_name = skill_file.parent.name
 
             # Parse frontmatter for description. Locate the closing ``---`` on
             # its own line rather than with ``raw.split("---", 2)`` — a bare
@@ -203,13 +209,11 @@ class HermesIntegration(SkillsIntegration):
             skill_content = self.post_process_skill_content(skill_content)
 
             # Write directly to global ~/.hermes/skills/speckit-<name>/SKILL.md
-            skill_dir = global_skills_dir / skill_name
-            skill_file = skill_dir / "SKILL.md"
             normalized = skill_content.replace("\r\n", "\n")
             from .._file_changes import changing_file
 
             with changing_file(skill_file):
-                skill_dir.mkdir(parents=True, exist_ok=True)
+                skill_file.parent.mkdir(parents=True, exist_ok=True)
                 skill_file.write_bytes(normalized.encode("utf-8"))
             created.append(skill_file)
 

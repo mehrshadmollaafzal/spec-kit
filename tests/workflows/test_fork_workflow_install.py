@@ -3,8 +3,12 @@
 import hashlib
 import io
 import json
+import subprocess
+import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from zipfile import ZipFile
 
 import pytest
@@ -15,9 +19,13 @@ from specify_cli.workflows.base import RunStatus, StepResult, StepStatus
 from specify_cli.workflows.catalog import WorkflowCatalog, WorkflowRegistry
 from specify_cli.workflows.engine import WorkflowEngine
 from specify_cli.workflows.step.command import CommandStep
+from tests.lock_helpers import watch_lock_attempt
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "tests/fixtures/fork-workflow/upstream-codex-init.zip"
+# Preset package, registry and overridden skills from the same parent wheel
+# with `init --integration codex --preset lean --script py`.
+LEAN_OVERLAY = FIXTURE.with_name("upstream-codex-lean-overlay.zip")
 WORKFLOW = ".specify/workflows/speckit/workflow.yml"
 UPSTREAM = "https://raw.githubusercontent.com/github/spec-kit/main/workflows/"
 COMMANDS = "constitution specify clarify architecture environment plan taskscode analyze impcode deployment test".split()
@@ -221,7 +229,7 @@ def test_fresh_init_offline_add_and_bundled_update(tmp_path, monkeypatch):
     assert_installed(project)
 
 
-@pytest.mark.parametrize("field", ["version", "sha256", "id"])
+@pytest.mark.parametrize("field", ["version", "sha256", "bundled_sha256", "id"])
 def test_invalid_packaged_catalog_preserves_install(legacy, monkeypatch, field):
     from specify_cli.workflows import _bundled
 
@@ -230,6 +238,8 @@ def test_invalid_packaged_catalog_preserves_install(legacy, monkeypatch, field):
         WorkflowRegistry(legacy).registry_path.read_bytes(),
     )
     info = _bundled.packaged_speckit()
+    if field == "sha256":
+        info.pop("bundled_sha256")
     info[field] = "mismatched"
     monkeypatch.setattr(_bundled, "packaged_speckit", lambda: info)
     result = cli("workflow", "add", "speckit")
@@ -340,12 +350,80 @@ def test_bare_speckit_id_and_explicit_local_source(legacy):
 
 
 def project_files(project):
-    # Advisory locks persist across operations and contain no installation data.
     return {
         p.relative_to(project): p.read_bytes()
         for p in project.rglob("*")
-        if p.is_file() and p != project / ".specify/.workflow-install.lock"
+        if p.is_file()
     }
+
+
+def test_bundled_install_serializes_registry_changes_without_target_lock(tmp_path, monkeypatch):
+    from specify_cli.workflows._bundled import install_speckit
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    project = tmp_path / "project"
+    project.mkdir()
+    committing = Event()
+    release = Event()
+    original_add = WorkflowRegistry.add
+
+    def add(registry, workflow_id, entry):
+        committing.set()
+        assert release.wait(10)
+        original_add(registry, workflow_id, entry)
+
+    monkeypatch.setattr(WorkflowRegistry, "add", add)
+    attempted = watch_lock_attempt(monkeypatch, "second-install_0")
+    with (
+        ThreadPoolExecutor(max_workers=1) as first,
+        ThreadPoolExecutor(max_workers=1, thread_name_prefix="second-install") as second,
+    ):
+        installing = first.submit(install_speckit, project, "init")
+        try:
+            assert committing.wait(10)
+            competing = second.submit(install_speckit, project, "init")
+            assert attempted.wait(10)
+            assert not competing.done()
+        finally:
+            release.set()
+        assert installing.result(timeout=10) == "installed v2.0.0"
+        assert competing.result(timeout=10) == "already installed"
+
+    assert_installed(project)
+    assert not (project / ".specify/.workflow-install.lock").exists()
+    assert len(list((home / ".specify").glob(".workflow-install-*.lock"))) == 1
+
+
+def test_bundled_install_honors_an_existing_legacy_lock(tmp_path, monkeypatch):
+    from specify_cli import shared_infra
+    from specify_cli.workflows._bundled import install_speckit
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    project = tmp_path / "project"
+    project.mkdir()
+    lock = project / ".specify/.workflow-install.lock"
+    attempted = Event()
+    original_lock = shared_infra._exclusive_project_lock
+
+    def observe_lock(root, name, *, context):
+        if (root, name) == (project, lock.name):
+            attempted.set()
+        return original_lock(root, name, context=context)
+
+    monkeypatch.setattr(shared_infra, "_exclusive_project_lock", observe_lock)
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        with original_lock(project, lock.name, context="legacy workflow install"):
+            original = lock.stat()
+            installing = worker.submit(install_speckit, project, "init")
+            assert attempted.wait(10)
+            assert not installing.done()
+            assert not (project / WORKFLOW).exists()
+        assert installing.result(timeout=10) == "installed v2.0.0"
+    assert lock.stat().st_ino == original.st_ino
 
 
 def assert_codex_upgrade(project):
@@ -529,6 +607,277 @@ def test_new_core_skill_cannot_overwrite_an_unowned_team_skill(legacy):
     ).read_bytes() == b"our existing architecture skill"
 
 
+@pytest.mark.parametrize(
+    ("agent", "options", "relative"),
+    [
+        ("gemini", None, ".gemini/commands/speckit.deployment.toml"),
+        ("copilot", None, ".github/skills/speckit-deployment/SKILL.md"),
+        ("copilot", "--commands", ".github/prompts/speckit.deployment.prompt.md"),
+        ("amp", None, ".agents/commands/speckit.deployment.md"),
+        ("goose", None, ".goose/recipes/speckit.deployment.yaml"),
+        ("rovodev", None, ".rovodev/prompts/speckit-deployment.prompt.md"),
+        ("generic", "--commands-dir .team/custom --skills", ".team/custom/speckit-deployment/SKILL.md"),
+    ],
+)
+def test_upgrade_cannot_claim_a_new_command_destination(legacy, agent, options, relative):
+    from specify_cli.integrations.manifest import IntegrationManifest
+
+    args = ["integration", "install", agent, "--force"]
+    if options:
+        args.append(f"--integration-options={options}")
+    result = cli(*args)
+    assert result.exit_code == 0, result.output
+
+    target = legacy / relative
+    assert target.is_file()
+    manifest = IntegrationManifest.load(agent, legacy)
+    assert manifest.remove(relative)
+    manifest.save()
+    custom = b"team-owned deployment instruction\r\n"
+    target.write_bytes(custom)
+    before = project_files(legacy)
+
+    result = cli("integration", "upgrade", agent)
+    assert result.exit_code == 1, result.output
+    assert "ownership conflict" in result.output.lower()
+    assert relative in result.output
+    assert project_files(legacy) == before
+
+    saved = target.rename(legacy / "team-deployment")
+    result = cli("integration", "upgrade", agent)
+    assert result.exit_code == 0, result.output
+    assert saved.read_bytes() == custom
+    assert relative in IntegrationManifest.load(agent, legacy).files
+    assert target.read_bytes() != custom
+
+
+def test_hermes_upgrade_preserves_global_destination_new_to_the_fork(legacy, monkeypatch):
+    from specify_cli.integrations import get_integration
+    from specify_cli.integrations.manifest import IntegrationManifest
+
+    profile = legacy.parent / "home"
+    profile.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: profile)
+    hermes = get_integration("hermes")
+    retained = {"constitution", "specify", "clarify", "plan", "analyze"}
+    templates = hermes.list_command_templates()
+    with monkeypatch.context() as upstream:
+        upstream.setattr(
+            hermes, "list_command_templates", lambda: [p for p in templates if p.stem in retained]
+        )
+        install = cli("integration", "install", "hermes", "--force")
+    assert install.exit_code == 0, install.output
+    manifest = IntegrationManifest.load("hermes", legacy)
+    manifest.version = "1.4.1.dev0"
+    manifest.save()
+    global_skills = profile / ".hermes/skills"
+    target = global_skills / "speckit-deployment/SKILL.md"
+    target.parent.mkdir()
+    target.write_bytes(b"Global team deployment skill")
+    before = project_files(legacy)
+    global_before = project_files(global_skills)
+
+    result = cli("integration", "upgrade", "hermes")
+    assert result.exit_code == 1, result.output
+    assert "ownership conflict" in result.output.lower() and "speckit-deployment" in result.output
+    assert project_files(legacy) == before
+    assert project_files(global_skills) == global_before
+
+    saved = target.parent.rename(target.parent.with_name("team-deployment")) / target.name
+    result = cli("integration", "upgrade", "hermes")
+    assert result.exit_code == 0, result.output
+    assert target.is_file() and saved.read_bytes() == b"Global team deployment skill"
+
+
+@pytest.mark.parametrize("version, force", [("1.4.1.dev0", ()), ("2.0.0.dev0", ("--force",))])
+def test_hermes_upgrade_identifies_retired_global_skills_without_deleting_them(
+    legacy, monkeypatch, version, force
+):
+    from specify_cli.integrations import get_integration
+    from specify_cli.integrations.manifest import IntegrationManifest
+
+    profile = legacy.parent / "home"
+    profile.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: profile)
+    with monkeypatch.context() as setup:
+        if version == "1.4.1.dev0":
+            hermes = get_integration("hermes")
+            retained = {"constitution", "specify", "clarify", "plan", "analyze"}
+            templates = [p for p in hermes.list_command_templates() if p.stem in retained]
+            setup.setattr(hermes, "list_command_templates", lambda: templates)
+        install = cli("integration", "install", "hermes", "--force")
+    assert install.exit_code == 0, install.output
+    manifest = IntegrationManifest.load("hermes", legacy)
+    manifest.version = version
+    manifest.save()
+    skills = profile / ".hermes/skills"
+    retired = ("checklist", "converge", "implement", "tasks")
+    with ZipFile(FIXTURE) as archive:
+        for name in retired:
+            path = skills / f"speckit-{name}/SKILL.md"
+            path.parent.mkdir()
+            path.write_bytes(archive.read(f".agents/skills/speckit-{name}/SKILL.md"))
+    edited = skills / "speckit-implement/SKILL.md"
+    edited.write_bytes(edited.read_bytes() + b"\n# Team customization\n")
+    unrelated = skills / "speckit-team-review/SKILL.md"
+    unrelated.parent.mkdir()
+    unrelated.write_bytes(b"Team review skill")
+    project_before = project_files(legacy)
+    skills_before = project_files(skills)
+
+    upgrade = cli("integration", "upgrade", "hermes", *force)
+    assert upgrade.exit_code == 1, upgrade.output
+    compact = "".join(upgrade.output.split())
+    for name in retired:
+        path = skills / f"speckit-{name}/SKILL.md"
+        assert "".join(str(path).split()) in compact
+    assert unrelated.parent.name not in upgrade.output
+    assert "other projects" in " ".join(upgrade.output.split())
+    assert project_files(legacy) == project_before
+    assert project_files(skills) == skills_before
+
+    backup = profile / "legacy-skills"
+    backup.mkdir()
+    for name in retired:
+        skill = skills / f"speckit-{name}"
+        skill.rename(backup / skill.name)
+    retry = cli("integration", "upgrade", "hermes", *force)
+    assert retry.exit_code == 0, retry.output
+    assert set(project_files(skills)) == {
+        Path(f"speckit-{name}/SKILL.md") for name in COMMANDS
+    } | {unrelated.relative_to(skills)}
+    assert unrelated.read_bytes() == skills_before[unrelated.relative_to(skills)]
+    assert project_files(backup) == {
+        Path(f"speckit-{name}/SKILL.md"): skills_before[Path(f"speckit-{name}/SKILL.md")]
+        for name in retired
+    }
+
+
+@pytest.mark.parametrize("order", [("gemini", "codex"), ("codex", "gemini")])
+def test_only_default_upgrade_publishes_new_workflow(legacy, order):
+    from specify_cli.integration_state import try_read_integration_json
+
+    install = cli("integration", "install", "gemini")
+    assert install.exit_code == 0, install.output
+    registry = WorkflowRegistry(legacy)
+    initial = ((legacy / WORKFLOW).read_bytes(), registry.registry_path.read_bytes())
+    codex_architecture = legacy / ".agents/skills/speckit-architecture/SKILL.md"
+    for index, agent in enumerate(order):
+        result = cli("integration", "upgrade", agent)
+        assert result.exit_code == 0, result.output
+        state, error = try_read_integration_json(legacy)
+        assert error is None and state["default_integration"] == "codex"
+        if index == 0 and agent == "gemini":
+            assert not codex_architecture.exists()
+            assert ((legacy / WORKFLOW).read_bytes(), registry.registry_path.read_bytes()) == initial
+        else:
+            assert_installed(legacy)
+    assert codex_architecture.is_file()
+    assert (legacy / ".gemini/commands/speckit.architecture.toml").is_file()
+
+
+def test_secondary_upgrade_preserves_a_custom_legacy_workflow(legacy):
+    install = cli("integration", "install", "gemini")
+    assert install.exit_code == 0, install.output
+    path = legacy / WORKFLOW
+    modified = path.read_bytes() + b"\n# Custom legacy workflow\n"
+    path.write_bytes(modified)
+    registry_path = WorkflowRegistry(legacy).registry_path
+    registry = registry_path.read_bytes()
+    result = cli("integration", "upgrade", "gemini")
+    assert result.exit_code == 0, result.output
+    assert path.read_bytes() == modified
+    assert registry_path.read_bytes() == registry
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_upstream_lean_requires_explicit_preset_migration(legacy, force):
+    from specify_cli.integrations.base import IntegrationBase
+    from specify_cli.presets import PresetManager
+
+    with ZipFile(LEAN_OVERLAY) as archive:
+        archive.extractall(legacy)
+    assert PresetManager(legacy).registry.get("lean")["version"] == "1.0.0"
+    before = project_files(legacy)
+    args = ["integration", "upgrade", "codex", *(["--force"] if force else [])]
+    result = cli(*args)
+    assert result.exit_code == 1, result.output
+    assert "specify preset update lean" in result.output
+    assert project_files(legacy) == before
+
+    result = cli("preset", "update", "lean")
+    assert result.exit_code == 0, result.output
+    assert PresetManager(legacy).registry.get("lean")["version"] == "2.0.0"
+    # Explicitly refresh the old manifest after inspecting the restored commands.
+    result = cli("integration", "upgrade", "codex", "--force")
+    assert result.exit_code == 0, result.output
+    assert_installed(legacy)
+    skills = legacy / ".agents/skills"
+    assert {p.parent.name for p in skills.glob("speckit-*/SKILL.md")} == {
+        f"speckit-{command}" for command in COMMANDS
+    }
+    plan = (skills / "speckit-plan/SKILL.md").read_text(encoding="utf-8")
+    assert "Read constitution, spec, shared architecture/environment" in plan
+    assert 'source: "templates/commands/plan.md"' in plan
+    helper = ".specify/scripts/python/workflow_context.py"
+    invocation = IntegrationBase.build_python_invocation(f"{helper} plan --json", legacy)
+    assert f"Run `{invocation}`" in plan
+    feature = legacy / "specs/001-migration"
+    feature.mkdir(parents=True)
+    (feature / "spec.md").write_text("# Migrated feature", encoding="utf-8")
+    (legacy / ".specify/feature.json").write_text(
+        '{"feature_directory": "specs/001-migration"}', encoding="utf-8"
+    )
+    for missing in ("architecture", "environment"):
+        outcome = subprocess.run(
+            [sys.executable, "-B", helper, "plan", "--json"],
+            cwd=legacy, capture_output=True, text=True, check=False,
+        )
+        assert outcome.returncode == 1 and f"Missing or empty {missing.upper()}" in outcome.stderr
+        (legacy / f".specify/memory/{missing}.md").write_text(f"# {missing}", encoding="utf-8")
+    assert_codex_upgrade(legacy)
+
+
+def test_upstream_lean_upgrade_preserves_locally_edited_preset(legacy):
+    with ZipFile(LEAN_OVERLAY) as archive:
+        archive.extractall(legacy)
+    template = legacy / ".specify/presets/lean/commands/speckit.plan.md"
+    template.write_bytes(template.read_bytes() + b"\n# Team planning procedure\n")
+    before = project_files(legacy)
+
+    result = cli("integration", "upgrade", "codex", "--force")
+    assert result.exit_code == 1, result.output
+    assert "back up" in result.output.lower()
+    assert project_files(legacy) == before
+
+
+def test_upgrade_checks_lean_registration_before_publication(legacy, monkeypatch):
+    from specify_cli.integrations import command_upgrade
+    from specify_cli.integrations._file_changes import write_bytes
+    from specify_cli.presets import PresetManager
+
+    result = cli("preset", "add", "lean")
+    assert result.exit_code == 0, result.output
+    before = project_files(legacy)
+    register = command_upgrade._register_presets_for_agent
+
+    def reintroduce_tasks(root, agent, **kwargs):
+        register(root, agent, **kwargs)
+        target = root / ".agents/skills/speckit-tasks/SKILL.md"
+        target.parent.mkdir(exist_ok=True)
+        write_bytes(target, b"Stale Lean tasks skill")
+        registry = PresetManager(root).registry
+        skills = registry.get("lean")["registered_skills"]
+        skills["codex"].append("speckit-tasks")
+        registry.update("lean", {"registered_skills": skills})
+
+    monkeypatch.setattr(command_upgrade, "_register_presets_for_agent", reintroduce_tasks)
+    result = cli("integration", "upgrade", "codex", "--force")
+    assert result.exit_code == 1, result.output
+    assert "Lean preset" in result.output
+    assert project_files(legacy) == before
+
+
 def test_missing_manifest_cannot_report_a_pending_migration_as_complete(legacy):
     manifest = legacy / ".specify/integrations/codex.manifest.json"
     saved = manifest.read_bytes()
@@ -608,8 +957,9 @@ def test_custom_workflow_edited_after_preflight_rolls_back_skills(legacy, monkey
     assert project_files(legacy) == {**before, Path(WORKFLOW): edited}
 
 
+@pytest.mark.parametrize("columns", [48, 180])
 def test_incomplete_skill_write_reports_original_for_manual_recovery(
-    legacy, monkeypatch
+    legacy, monkeypatch, columns
 ):
     import tempfile
 
@@ -628,8 +978,10 @@ def test_incomplete_skill_write_reports_original_for_manual_recovery(
     with monkeypatch.context() as faults:
         faults.setattr(tempfile, "tempdir", str(backup_parent))
         faults.setattr(Path, "write_bytes", partial_write)
+        faults.setenv("COLUMNS", str(columns))
         result = cli("integration", "upgrade", "codex")
-    assert result.exit_code == 1 and "Recovery snapshots retained" in result.output
+    assert result.exit_code == 1
+    assert "Recovery snapshots retained" in " ".join(result.output.split())
     assert project_files(legacy) == {
         **original,
         skill.relative_to(legacy): b"incomplete write",
@@ -640,7 +992,8 @@ def test_incomplete_skill_write_reports_original_for_manual_recovery(
     (saved,) = [
         p for p in snapshots if p.read_bytes() == original[skill.relative_to(legacy)]
     ]
-    assert str(saved) in "".join(result.output.splitlines())
+    reported_recovery = "".join(f"{skill}: {saved}".split())
+    assert reported_recovery in "".join(result.output.split())
     skill.write_bytes(saved.read_bytes())
     assert_codex_upgrade(legacy)
     assert_installed(legacy)

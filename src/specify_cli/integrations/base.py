@@ -707,6 +707,7 @@ class IntegrationBase(ABC):
         capture_max_bytes: int | None = None,
         reasoning_effort: str | None = None,
         context_size: str | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         """Dispatch a Spec Kit command through this integration's CLI.
 
@@ -718,6 +719,9 @@ class IntegrationBase(ABC):
         Integrations with custom dispatch behavior can override
         ``build_command_invocation()``, ``_build_dispatch_prompt()``,
         ``build_exec_args()``, or ``dispatch_command()`` directly.
+
+        *env*, when supplied, sets the child process environment without
+        modifying the caller's process environment.
 
         When *stream* is ``True`` (the default), stdout and stderr are
         piped directly to the terminal so the user sees live output.
@@ -791,6 +795,7 @@ class IntegrationBase(ABC):
             exec_args = [resolved, *exec_args[1:]]
 
         cwd = str(project_root) if project_root else None
+        env_kwargs = {"env": env} if env is not None else {}
 
         if stream:
             # No timeout when streaming — the user sees live output and
@@ -801,6 +806,7 @@ class IntegrationBase(ABC):
                     exec_args,
                     text=True,
                     cwd=cwd,
+                    **env_kwargs,
                 )
             except KeyboardInterrupt:
                 return {
@@ -820,6 +826,7 @@ class IntegrationBase(ABC):
                 cwd=cwd,
                 timeout=timeout,
                 max_bytes=capture_max_bytes,
+                **env_kwargs,
             ).as_dispatch_result()
 
         result = subprocess.run(
@@ -828,6 +835,7 @@ class IntegrationBase(ABC):
             text=True,
             cwd=cwd,
             timeout=timeout,
+            **env_kwargs,
         )
         return {
             "exit_code": result.returncode,
@@ -930,6 +938,12 @@ class IntegrationBase(ABC):
             )
         subdir = self.config.get("commands_subdir", "commands")
         return project_root / folder / subdir
+
+    def core_command_paths(
+        self, project_root: Path, name: str, parsed_options: dict[str, Any] | None
+    ) -> tuple[Path, ...]:
+        """Return the destinations for one bundled command template."""
+        return (self.commands_dest(project_root) / self.command_filename(name),)
 
     # -- File operations — granular primitives for setup() ----------------
 
@@ -2090,6 +2104,15 @@ class SkillsIntegration(IntegrationBase):
         subdir = self.config.get("commands_subdir", "skills")
         return project_root / folder / subdir
 
+    @staticmethod
+    def _skill_path(directory: Path, name: str) -> Path:
+        return directory / f"speckit-{name.replace('.', '-')}" / "SKILL.md"
+
+    def core_command_paths(
+        self, project_root: Path, name: str, parsed_options: dict[str, Any] | None
+    ) -> tuple[Path, ...]:
+        return (self._skill_path(self.skills_dest(project_root), name),)
+
     def build_command_invocation(self, command_name: str, args: str = "") -> str:
         """Build the agent's native invocation for a hyphenated skill name."""
         stem = command_name
@@ -2207,7 +2230,8 @@ class SkillsIntegration(IntegrationBase):
 
             # Derive the skill name from the template stem
             command_name = src_file.stem  # e.g. "plan"
-            skill_name = f"speckit-{command_name.replace('.', '-')}"
+            skill_file = self._skill_path(skills_dir, command_name)
+            skill_name = skill_file.parent.name
 
             # Parse frontmatter for description. Locate the closing ``---`` on
             # its own line rather than with ``raw.split("---", 2)`` — a bare
@@ -2290,8 +2314,6 @@ class SkillsIntegration(IntegrationBase):
             skill_content = self.post_process_skill_content(skill_content)
 
             # Write speckit-<name>/SKILL.md
-            skill_dir = skills_dir / skill_name
-            skill_file = skill_dir / "SKILL.md"
             dst = self.write_file_and_record(
                 skill_content, skill_file, project_root, manifest
             )

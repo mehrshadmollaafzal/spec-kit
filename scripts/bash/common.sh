@@ -509,6 +509,38 @@ for _, ext_id in sorted(ranked):
     done
 }
 
+_extension_template_path() {
+    local ext="$1"
+    local template_name="$2"
+    local helper="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/../python/resolve_template.py"
+    if [ -f "$ext/extension.yml" ] && [ -f "$helper" ]; then
+        local -a python_cmd=()
+        local line native_ext="$ext" relative
+        while IFS= read -r line; do
+            python_cmd+=("$line")
+        done < <(_python3_command)
+        if [ "${#python_cmd[@]}" -gt 0 ]; then
+            if command -v cygpath >/dev/null 2>&1; then
+                helper="$(cygpath -m "$helper")"
+                native_ext="$(cygpath -m "$ext")"
+            fi
+            if ! relative=$(PYTHONIOENCODING=utf-8 "${python_cmd[@]}" -B "$helper" "$template_name" --extension-dir "$native_ext"); then
+                return 2
+            fi
+            if [ -n "$relative" ]; then
+                printf '%s/%s\n' "$ext" "$relative"
+            fi
+            return 0
+        fi
+    fi
+
+    local candidate="$ext/templates/${template_name}.md"
+    [ -f "$candidate" ] || candidate="$ext/${template_name}.md"
+    if [ -f "$candidate" ]; then
+        printf '%s\n' "$candidate"
+    fi
+}
+
 # Resolve a template name to a file path using the priority stack:
 #   1. .specify/templates/overrides/
 #   2. .specify/presets/<preset-id>/templates/ (sorted by priority from .registry)
@@ -600,10 +632,9 @@ except Exception:
         fi
         while IFS= read -r extension_id; do
             [ -n "$extension_id" ] || continue
-            local ext="$ext_dir/$extension_id"
-            local candidate="$ext/templates/${template_name}.md"
-            [ -f "$candidate" ] || candidate="$ext/${template_name}.md"
-            [ -f "$candidate" ] && echo "$candidate" && return 0
+            local candidate
+            candidate=$(_extension_template_path "$ext_dir/$extension_id" "$template_name") || return 2
+            [ -n "$candidate" ] && printf '%s\n' "$candidate" && return 0
         done <<< "$sorted_extensions"
     fi
 
@@ -822,10 +853,9 @@ except Exception as exc:
         fi
         while IFS= read -r extension_id; do
             [ -n "$extension_id" ] || continue
-            local ext="$ext_dir/$extension_id"
-            local candidate="$ext/templates/${template_name}.md"
-            [ -f "$candidate" ] || candidate="$ext/${template_name}.md"
-            if [ -f "$candidate" ]; then
+            local candidate
+            candidate=$(_extension_template_path "$ext_dir/$extension_id" "$template_name") || return 2
+            if [ -n "$candidate" ]; then
                 layer_paths+=("$candidate")
                 layer_strategies+=("replace")
                 effective_base_found=true

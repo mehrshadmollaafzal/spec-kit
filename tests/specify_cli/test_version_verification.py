@@ -315,6 +315,26 @@ class TestResolutionFailures:
         assert result.exit_code == 1
         assert "Upgrade aborted: HTTP 500" in strip_ansi(result.output)
 
+    @pytest.mark.parametrize(("action", "expected_exit"), [("check", 0), ("upgrade", 1)])
+    def test_missing_fork_release_points_to_checkout_install(
+        self, action, expected_exit, uv_tool_argv0, clean_environ
+    ):
+        err = urllib.error.HTTPError(
+            "https://api.github.com", 404, "Not Found", {}, None
+        )
+        with patch("specify_cli.authentication.http.urllib.request.urlopen", side_effect=err), patch(
+            "specify_cli._version._run_installer"
+        ) as install:
+            result = runner.invoke(app, ["self", action])
+        assert result.exit_code == expected_exit
+        output = strip_ansi(result.output)
+        assert "No stable release is available from the fork" in output
+        assert (
+            "https://github.com/mehrshadmollaafzal/spec-kit/blob/"
+            "codex/eleven-command-workflow/docs/fork-workflow.md#install-from-this-fork"
+        ) in output
+        install.assert_not_called()
+
     @pytest.mark.parametrize(
         "code, expected",
         [
@@ -405,7 +425,7 @@ class TestUnknownCurrent:
         assert result.exit_code == 2
         out = strip_ansi(result.output)
         assert "Could not determine the previous version" in out
-        assert "https://github.com/github/spec-kit/releases" in out
+        assert "https://github.com/mehrshadmollaafzal/spec-kit/releases" in out
 
 
 class TestTokenScrubbing:

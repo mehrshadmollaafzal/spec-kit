@@ -1,5 +1,9 @@
 # Installing with pipx
 
+> [!NOTE]
+> This archived page describes upstream installation. For the eleven command
+> workflow, follow [Install from this fork](../fork-workflow.md#install-from-this-fork).
+
 [pipx](https://pipx.pypa.io/) is a tool for installing Python CLI applications in isolated environments. It does not require [uv](https://docs.astral.sh/uv/).
 
 ## Install Specify CLI

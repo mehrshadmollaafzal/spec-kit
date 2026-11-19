@@ -16,12 +16,14 @@ from ..integration_runtime import (
 from ..integration_state import default_integration_key as _default_integration_key, installed_integration_keys as _installed_integration_keys
 from ._command_upgrade_layout import (
     _PresetRegistryUnreadableError,
+    _check_lean_preset,
     _installed_command_presets_affecting_agent,
     _installed_presets_affecting_agent,
     _legacy_command_root_changed,
     _legacy_command_root_upgrade_pending,
     _manifest_tracks_skill_layout,
-    _preflight_native_skills,
+    _preflight_core_commands,
+    _verify_core_commands,
 )
 from ._commands import integration_app
 from ._lifecycle import external_lifecycle, lifecycle_success
@@ -69,8 +71,9 @@ def integration_upgrade(
 
     manifest_path = project_root / ".specify" / "integrations" / f"{key}.manifest.json"
     if not manifest_path.exists():
-        workflow = install_speckit(project_root, "preflight")
-        if workflow not in {"not installed", "already current"}:
+        if key == installed_key and install_speckit(project_root, "preflight") not in {
+            "not installed", "already current",
+        }:
             console.print(
                 f"[red]Cannot migrate without {escape(manifest_path.name)}.[/red] "
                 "Restore the original integration manifest from backup and retry."
@@ -85,6 +88,9 @@ def integration_upgrade(
     except _MANIFEST_READ_ERRORS as exc:
         console.print(f"[red]Error:[/red] Integration manifest for '{key}' is unreadable: {exc}")
         raise typer.Exit(1)
+
+    # Check the preset contract before attributing generated overrides to user edits.
+    _check_lean_preset(project_root)
 
     # Detect modified files via manifest hashes
     modified = old_manifest.check_modified()
@@ -204,8 +210,11 @@ def integration_upgrade(
             )
             raise typer.Exit(1)
 
-    install_speckit(project_root, "preflight")
-    required_skills = _preflight_native_skills(integration, project_root, old_manifest)
+    if key == installed_key:
+        install_speckit(project_root, "preflight")
+    required_commands = _preflight_core_commands(
+        integration, project_root, old_manifest, parsed_options
+    )
 
     # Ensure shared infrastructure is up to date; --force overwrites existing files.
     infra_integration = integration
@@ -256,9 +265,7 @@ def integration_upgrade(
             events=events_map,
             force=force,
         )
-        missing = required_skills - new_manifest.files.keys()
-        if missing:
-            raise ValueError(f"Missing core skills in the upgraded manifest: {sorted(missing)}")
+        _verify_core_commands(project_root, new_manifest, required_commands)
         settings = _with_integration_setting(
             current,
             key,
@@ -375,9 +382,17 @@ def integration_upgrade(
             ),
         )
 
-    # Recheck ownership and compatibility under the workflow lock at publication.
-    # A failed swap or registry save also unwinds the integration write journal.
-    workflow_status = install_speckit(project_root, "upgrade")
-    lifecycle_success(f"speckit workflow: {workflow_status}")
+        # Recheck the effective command layout after preset/extension registration.
+        _check_lean_preset(project_root)
+        _verify_core_commands(project_root, new_manifest, required_commands)
+
+        # The shared workflow's `auto` dispatch follows the default integration.
+        # A failed workflow swap or save also unwinds the integration journal.
+        workflow_status = install_speckit(project_root, "upgrade")
+        lifecycle_success(f"speckit workflow: {workflow_status}")
+    elif installed_key:
+        lifecycle_success(
+            f"speckit workflow: managed by the default integration '{escape(installed_key)}'."
+        )
     name = (integration.config or {}).get("name", key)
     lifecycle_success(f"\n[green]✓[/green] Integration '{escape(str(name))}' upgraded successfully")

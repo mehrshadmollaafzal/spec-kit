@@ -25,6 +25,10 @@ specify workflow run speckit -i spec="Build a kanban board with drag-and-drop ta
 
 Input values follow the [input type contracts](api.md#input-types).
 
+Each run has its own ID and checkpoint. If `SPECKIT_WORKFLOW_RUN_ID` supplies
+an ID that already exists in the project, the command rejects it and preserves
+the earlier run.
+
 With `--json`, a single machine-readable object is printed instead of formatted text (the default output is unchanged when the flag is omitted):
 
 ```bash
@@ -85,6 +89,10 @@ expression contexts without running step implementations again, then continues
 at the unfinished occurrence. This lets a run continue with information that
 only became available after it paused, or with a corrected value after a
 failure.
+
+Only one process can execute a run at a time. A concurrent resume of that
+run fails immediately. After the active process exits, check the run's
+status before resuming again.
 
 Supplied `--input` values are merged over the run's stored root inputs and
 re-validated against the workflow's input types. Unknown root input names are

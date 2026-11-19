@@ -8,63 +8,35 @@
   [`none`](integrations/none.md) for agent-neutral scaffolding.
 - [uv](https://docs.astral.sh/uv/) for package management (recommended) or [pipx](https://pipx.pypa.io/) for persistent installation
 - [Python 3.11+](https://www.python.org/downloads/)
-- [Git](https://git-scm.com/downloads) *(optional — required only when the git extension is enabled)*
+- [Git](https://git-scm.com/downloads) to clone the fork or use the optional Git extension
 
 ## Installation
 
-> [!IMPORTANT]
-> Spec Kit is distributed through two official channels, both published and maintained by the Spec Kit maintainers: the [github/spec-kit](https://github.com/github/spec-kit) GitHub repository (source installs) and the [`specify-cli`](https://pypi.org/project/specify-cli/) package on [PyPI](https://pypi.org/project/specify-cli/). Either route is supported for normal installs — use the commands shown below. After installing, run `specify version` as a local version/runtime sanity check. It confirms that the `specify` command is available and reports its version, but it does not prove whether the executable came from PyPI or GitHub. For offline or air-gapped environments, locally built wheels created from this repository are also valid.
+### Install from the fork checkout
 
-Spec Kit supports two install routes:
-
-1. **Install from source (GitHub)** — the recommended route, pinned to a release tag.
-2. **Install from PyPI** — install the published `specify-cli` package with your usual Python tooling.
-
-### Install from Source — Persistent Installation (Recommended)
-
-Install once and use everywhere. Replace `vX.Y.Z` with a release tag from [Releases](https://github.com/github/spec-kit/releases) — keep the leading `v` (for example, `v0.12.11`, not `0.12.11`):
-
-> [!NOTE]
-> The command below requires **[uv](https://docs.astral.sh/uv/)**. If you see `command not found: uv`, [install uv first](./install/uv.md).
+Follow [Install from this fork](fork-workflow.md#install-from-this-fork) for
+Windows and POSIX setup. For a development checkout, clone the fork branch and
+run `uv sync` from the checkout.
 
 ```bash
-uv tool install specify-cli --from git+https://github.com/github/spec-kit.git@vX.Y.Z
+git clone --branch codex/eleven-command-workflow https://github.com/mehrshadmollaafzal/spec-kit.git
+cd spec-kit
+uv sync
+uv run specify init ../my-product --integration codex --script py
 ```
 
-Then initialize a project:
+Run `uv run specify version` from the checkout to verify the CLI. For a
+persistent tool install using a published fork tag, select a tag from
+[the fork's releases](https://github.com/mehrshadmollaafzal/spec-kit/releases)
+and follow the [upgrade guide](upgrade.md). A wheel built from the checkout can
+also be installed locally.
 
-```bash
-specify init <PROJECT_NAME> --integration copilot
-```
+### Archived upstream installation routes
 
-### Install from PyPI
-
-Spec Kit is also published to PyPI as [`specify-cli`](https://pypi.org/project/specify-cli/), so you can install it with your preferred Python package manager without referencing the Git URL:
-
-```bash
-# Using uv (recommended)
-uv tool install specify-cli
-
-# Or using pipx
-pipx install specify-cli
-
-# Or using pip
-pip install specify-cli
-```
-
-If `specify-cli` is already installed, these commands keep the installed version, even when a newer release exists. Compare the version shown by `specify version` with the [latest version on PyPI](https://pypi.org/project/specify-cli/). To replace an older install, use the same tool as the original install: `uv tool install --force specify-cli`, `pipx install --force specify-cli` or `pip install --upgrade specify-cli`. A different tool can install a second copy and leave the old `specify` first on `PATH`. An old CLI can't set up projects from current releases: with 0.1.6, for example, `specify init --integration ...` fails with `No such option: --integration`, and `specify init --ai ...` fails with `No matching release asset found`.
-
-To install a specific release, pin the version — for example `uv tool install specify-cli==0.12.11`. See the [PyPI installation guide](install/pypi.md) for details, including how to upgrade and how to [install from a custom or private package index](install/pypi.md#install-from-a-custom-or-private-package-index).
-
-### One-time Usage
-
-Run directly without installing — see the [One-time usage (uvx)](install/one-time.md) guide.
-
-### Alternative Package Managers
-
-- **PyPI** — see the [PyPI installation guide](install/pypi.md)
-- **pipx** — see the [pipx installation guide](install/pipx.md)
-- **Enterprise / Air-Gapped** — see the [air-gapped installation guide](install/air-gapped.md)
+The original [PyPI](install/pypi.md), [pipx](install/pipx.md) and
+[one-time usage](install/one-time.md) guides describe upstream releases.
+Use the [fork installation instructions](fork-workflow.md#install-from-this-fork)
+for the eleven command workflow.
 
 ### Specify Integration
 
@@ -116,7 +88,7 @@ specify init my-project --non-interactive --ignore-agent-tools
 
 `--ignore-agent-tools` skips the agent executable check when the agent will run
 elsewhere; omit it when you want that check. Non-interactive initialization
-defaults to Copilot unless you select another integration explicitly.
+defaults to Copilot unless you select another integration explicitly. Run these commands from the fork checkout with `uv run`, or use an installed fork executable.
 
 For a non-empty directory, `--force` acknowledges the merge warning. Review the
 [existing-project guide](how-to/existing-projects.md) and commit or back up local
@@ -142,22 +114,12 @@ After installation, run the following command as a local version/runtime check:
 specify version
 ```
 
-This confirms that the `specify` command is available and reporting the expected version. It does not prove whether that executable came from PyPI or GitHub.
+Run it through `uv run` from a development checkout. A successful initialization
+installs the core skills listed in the [fork quickstart](quickstart.md). Invoke
+them from the coding agent's chat.
 
-**Stay current:** Run `specify self check` periodically to learn whether a newer release is available — it is read-only and never modifies your installation. When you are ready to upgrade, follow the [Upgrade Guide](./upgrade.md).
-
-After initialization with GitHub Copilot's default skills mode, the following
-skills should be available. Invoke them in your agent's chat, not in the terminal:
-
-- `/speckit-specify` - Create specifications
-- `/speckit-plan` - Generate implementation plans
-- `/speckit-tasks` - Break down into actionable tasks
-- `/speckit-implement` - Execute implementation tasks
-- `/speckit-analyze` - Validate cross-artifact consistency
-- `/speckit-clarify` - Identify and resolve ambiguities
-- `/speckit-checklist` - Generate quality checklists
-- `/speckit-constitution` - Create or update project principles
-- `/speckit-converge` - Assess codebase against artifacts and append remaining tasks
+`specify self check` checks for a fork release. See the [Upgrade Guide](upgrade.md)
+for checkout and release updates.
 
 Scripts are installed into a variant subdirectory matching the chosen script type:
 

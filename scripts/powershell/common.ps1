@@ -425,6 +425,35 @@ function Get-SortedExtensionIds {
     return $ranked | Sort-Object Priority, Id | ForEach-Object { $_.Id }
 }
 
+function Find-ExtensionTemplatePath {
+    param(
+        [Parameter(Mandatory=$true)][string]$ExtensionDir,
+        [Parameter(Mandatory=$true)][string]$TemplateName
+    )
+
+    $helper = Join-Path $PSScriptRoot '../python/resolve_template.py'
+    if ((Test-Path -LiteralPath (Join-Path $ExtensionDir 'extension.yml') -PathType Leaf) -and
+        (Test-Path -LiteralPath $helper -PathType Leaf)) {
+        $pyCmd = @(Get-Python3Command)
+        if ($pyCmd) {
+            $pyArgs = if ($pyCmd.Count -gt 1) { $pyCmd[1..($pyCmd.Count - 1)] } else { @() }
+            $result = & $pyCmd[0] @pyArgs -B $helper $TemplateName --extension-dir $ExtensionDir --json
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to resolve $TemplateName from $ExtensionDir"
+            }
+            $relative = $result | ConvertFrom-Json
+            if ($relative) { return Join-Path $ExtensionDir $relative }
+            return $null
+        }
+    }
+
+    $candidate = Join-Path $ExtensionDir "templates/$TemplateName.md"
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    $candidate = Join-Path $ExtensionDir "$TemplateName.md"
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    return $null
+}
+
 # Resolve a template name to a file path using the priority stack:
 #   1. .specify/templates/overrides/
 #   2. .specify/presets/<preset-id>/templates/ (sorted by priority from .registry)
@@ -511,11 +540,8 @@ function Resolve-Template {
     $extDir = Join-Path $RepoRoot '.specify/extensions'
     if (Test-Path -LiteralPath $extDir) {
         foreach ($extensionId in Get-SortedExtensionIds -ExtensionsDir $extDir) {
-            $candidate = Join-Path $extDir "$extensionId/templates/$TemplateName.md"
-            if (-not (Test-Path -LiteralPath $candidate)) {
-                $candidate = Join-Path $extDir "$extensionId/$TemplateName.md"
-            }
-            if (Test-Path -LiteralPath $candidate) { return $candidate }
+            $candidate = Find-ExtensionTemplatePath -ExtensionDir (Join-Path $extDir $extensionId) -TemplateName $TemplateName
+            if ($candidate) { return $candidate }
         }
     }
 
@@ -731,11 +757,8 @@ except Exception as exc:
     $extDir = Join-Path $RepoRoot '.specify/extensions'
     if (-not $effectiveBaseFound -and (Test-Path -LiteralPath $extDir)) {
         foreach ($extensionId in Get-SortedExtensionIds -ExtensionsDir $extDir) {
-            $candidate = Join-Path $extDir "$extensionId/templates/$TemplateName.md"
-            if (-not (Test-Path -LiteralPath $candidate)) {
-                $candidate = Join-Path $extDir "$extensionId/$TemplateName.md"
-            }
-            if (Test-Path -LiteralPath $candidate) {
+            $candidate = Find-ExtensionTemplatePath -ExtensionDir (Join-Path $extDir $extensionId) -TemplateName $TemplateName
+            if ($candidate) {
                 $layerPaths += $candidate
                 $layerStrategies += 'replace'
                 $effectiveBaseFound = $true

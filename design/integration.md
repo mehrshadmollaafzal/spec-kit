@@ -459,6 +459,9 @@ them. Keep agent-specific settings and events consistent with that lifecycle.
 write shared templates, scripts or integration files. Override it to reject a
 setup that would fail partway, raising `ValueError` or `OSError`; the CLI then
 exits with the message and changes nothing. The default accepts every setup.
+Built-in adapters that customize their core command layout expose the same
+rendered destinations through `core_command_paths()`. Upgrade checks these
+destinations against the installation manifest before rendering any command.
 
 Event cleanup releases only the departing integration's dispatcher claim.
 It deletes `.specify/events.py` only when that integration's current or prior

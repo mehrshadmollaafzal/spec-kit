@@ -9,8 +9,9 @@ and use the workflow for the next bounded change.
 Before initialization, commit or stash existing work and create a branch for the
 adoption. This makes every generated file visible in a normal code review.
 
-Choose the [integration key](../integrations/index.md) for the coding agent
-you use. Then run the command from the repository root:
+[Install this fork](../fork-workflow.md#install-from-this-fork) and choose the
+[integration key](../integrations/index.md) for the coding agent you use. Then
+run the command from the product repository root:
 
 ```bash
 specify init --here --force --integration <key>
@@ -49,7 +50,7 @@ repository or that the team has explicitly agreed to adopt:
 ```text
 /speckit-constitution Preserve public API compatibility. Follow the existing
 service boundaries. Every database migration must include a rollback plan.
-Run the repository's established unit and integration test suites.
+Verify changes in the test stage using the repository's established suites.
 ```
 
 Use the repository's README, architecture decisions, contribution guide, and
@@ -78,21 +79,20 @@ behavior.
 
 ## 4. Plan Against the Repository
 
-Continue through the normal workflow:
+Continue through the [eleven command workflow](../fork-workflow.md):
 
 1. Run `/speckit-clarify` to resolve uncertain behavior and compatibility
    requirements.
-2. Run `/speckit-plan` and verify that the proposed design reuses the existing
-   architecture, dependencies, and test conventions.
-3. Run `/speckit-tasks`, then `/speckit-analyze` to check consistency before
+2. Run `/speckit-architecture` and `/speckit-environment` to capture shared system
+   decisions, then run `/speckit-plan` for the feature design.
+3. Run `/speckit-taskscode`, then `/speckit-analyze` to check consistency before
    implementation.
-4. Run `/speckit-implement` and review code and artifact changes together.
-5. Run `/speckit-converge` to find remaining gaps. If it adds tasks, repeat
-   implementation and convergence until the feature is complete.
+4. Run `/speckit-impcode` and review code and coding progress together.
+5. Use `/speckit-deployment` for authorized deployments and `/speckit-test` for
+   product verification. Use the reported defects to scope any coding repairs.
 
 For command details and optional quality gates, see the
-[Quick Start Guide](../quickstart.md) and
-[Agentic SDD reference](../reference/agentic-sdd.md).
+[fork quickstart](../quickstart.md).
 
 ## 5. Decide How Specs Will Age
 

@@ -33,6 +33,14 @@ The optional `--integration-options="--skills"` flag restates the default.
 
 Setup can replace another project's global Spec Kit skill files.
 
+Before upgrading to the eleven-command workflow, check whether other projects
+in your profile still use `speckit-checklist`, `speckit-converge`,
+`speckit-implement`, or `speckit-tasks`. Upgrade lists any of those skill paths
+it finds and stops before refreshing files, including with `--force`.
+When those projects are ready to migrate, move the listed skill directories to
+a backup outside `~/.hermes/skills`, then retry `specify integration upgrade hermes`.
+This preserves both stock copies and local edits in the backup.
+
 **Uninstall removes every global `speckit-*` skill directory, even if edited
 and even without `--force`.** These global files are not protected by the
 project-local manifest's modified-file checks. Back up customizations before

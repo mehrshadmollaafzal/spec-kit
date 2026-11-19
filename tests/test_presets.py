@@ -504,11 +504,11 @@ def test_core_specify_command_writes_composed_spec_template():
         encoding="utf-8"
     )
 
-    assert "resolve-template.sh spec-template --json" in content
-    assert "resolve-template.ps1 spec-template -Json" in content
-    assert "resolve_template.py spec-template --json" in content
-    assert "parse `TEMPLATE_CONTENT` as the active `spec-template`" in content
-    assert "Write `TEMPLATE_CONTENT` to `SPECIFY_FEATURE_DIRECTORY/spec.md`" in content
+    assert "workflow.sh context specify --json" in content
+    assert "workflow.ps1 context specify --json" in content
+    assert "workflow_context.py specify --json" in content
+    assert "Parse `TEMPLATE_CONTENT` as the active `spec-template`" in content
+    assert "Use `TEMPLATE_CONTENT` as the starting point for the spec" in content
     assert "do not continue with only one contributing template layer" in content
     assert "Copy the resolved `spec-template` file" not in content
 
@@ -543,15 +543,23 @@ class TestLeanPreset:
             tmpl_path = LEAN_PRESET_DIR / tmpl["file"]
             assert tmpl_path.exists(), f"Missing command file: {tmpl['file']}"
 
-    def test_lean_commands_have_no_scripts(self):
-        """Verify lean commands have no scripts in frontmatter."""
+    def test_lean_scripts_are_limited_to_feature_path_validation(self):
+        """Lean specify validates paths with the same helper as the core command."""
         from specify_cli.agents import CommandRegistrar
 
-        for name in LEAN_COMMAND_NAMES:
-            cmd_path = LEAN_PRESET_DIR / "commands" / f"speckit.{name.split('.')[-1]}.md"
-            content = cmd_path.read_text()
-            frontmatter, _ = CommandRegistrar.parse_frontmatter(content)
-            assert "scripts" not in frontmatter, f"{name} should not have scripts in frontmatter"
+        command_dir = LEAN_PRESET_DIR / "commands"
+        specify, _ = CommandRegistrar.parse_frontmatter(
+            (command_dir / "speckit.specify.md").read_text(encoding="utf-8")
+        )
+        assert specify["scripts"] == {
+            "sh": "scripts/bash/workflow.sh context specify --json --paths-only",
+            "ps": "scripts/powershell/workflow.ps1 context specify --json --paths-only",
+            "py": "scripts/python/workflow_context.py specify --json --paths-only",
+        }
+        constitution, _ = CommandRegistrar.parse_frontmatter(
+            (command_dir / "speckit.constitution.md").read_text(encoding="utf-8")
+        )
+        assert "scripts" not in constitution
 
     def test_lean_commands_have_no_hooks(self):
         """Verify lean commands do not contain extension hook boilerplate."""

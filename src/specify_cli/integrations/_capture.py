@@ -14,7 +14,7 @@ import signal
 import subprocess
 import threading
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -161,7 +161,9 @@ class _ProcessTree:
     directly: the interrupt is handled here, by killing the group or job.
     """
 
-    def __init__(self, args: Sequence[str], cwd: str | None) -> None:
+    def __init__(
+        self, args: Sequence[str], cwd: str | None, *, env: Mapping[str, str] | None = None
+    ) -> None:
         isolation: dict[str, Any] = (
             {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | _CREATE_SUSPENDED}
             if os.name == "nt"
@@ -172,6 +174,7 @@ class _ProcessTree:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=cwd,
+            env=env,
             **isolation,
         )
         self._job: Any = None
@@ -439,6 +442,7 @@ def run_captured(
     cwd: str | None = None,
     timeout: float | None = None,
     max_bytes: int = DEFAULT_CAPTURE_MAX_BYTES,
+    env: Mapping[str, str] | None = None,
 ) -> CapturedProcess:
     """Run *args* and capture stdout and stderr, each capped at *max_bytes*.
 
@@ -447,7 +451,8 @@ def run_captured(
     result (exit code ``-1`` or ``130``) together with the output read so far,
     instead of being raised, after the process's group (POSIX) or job
     (Windows) is killed; a descendant that left it is not killed. ``OSError``
-    from starting the process propagates.
+    from starting the process propagates. When supplied, *env* is the
+    environment for the captured subprocess.
     """
     if not capture_max_bytes_is_valid(max_bytes):
         raise ValueError(
@@ -462,7 +467,7 @@ def run_captured(
     try:
         try:
             with _deferred_interrupt() as pending_interrupt:
-                tree = _ProcessTree(args, cwd)
+                tree = _ProcessTree(args, cwd, **({"env": env} if env is not None else {}))
                 _register(tree)
                 for pipe, sink in zip((tree.proc.stdout, tree.proc.stderr), sinks):
                     reader = threading.Thread(

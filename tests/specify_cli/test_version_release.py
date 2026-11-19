@@ -199,6 +199,16 @@ def _capture_request_via_urlopen():
     return captured, _side_effect
 
 
+def test_latest_release_lookup_uses_the_fork_even_in_an_upstream_checkout(monkeypatch):
+    monkeypatch.setenv("GITHUB_REPOSITORY", "github/spec-kit")
+    captured, respond = _capture_request_via_urlopen()
+    with patch("specify_cli.authentication.http.urllib.request.urlopen", side_effect=respond):
+        assert _fetch_latest_release_tag() == ("v0.7.4", None)
+    assert captured["request"].full_url == (
+        "https://api.github.com/repos/mehrshadmollaafzal/spec-kit/releases/latest"
+    )
+
+
 def _capture_request_via_auth_opener():
     captured = {}
 

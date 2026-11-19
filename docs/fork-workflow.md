@@ -13,7 +13,7 @@ reference those shared decisions rather than independently choosing a stack.
 | Codex command | Reads | Owns |
 |---|---|---|
 | `$speckit-constitution` | Existing principles and project context | `.specify/memory/constitution.md` |
-| `$speckit-specify` | Product request and constitution | `F/spec.md`, `F/checklists/requirements.md`, feature selection |
+| `$speckit-specify` | Product request and constitution | `F/spec.md`, feature selection, and `F/checklists/requirements.md` with core specify |
 | `$speckit-clarify` | Spec and constitution | Spec clarifications and existing requirements checklist markers |
 | `$speckit-architecture` | Constitution, spec, existing system decisions | `.specify/memory/architecture.md` |
 | `$speckit-environment` | Requirements and architecture | `.specify/memory/environment.md` |
@@ -27,7 +27,8 @@ reference those shared decisions rather than independently choosing a stack.
 The logical names are `speckit.architecture`, etc. Other agent integrations render
 their native command spelling. Codex receives `.agents/skills/speckit-<name>/SKILL.md`.
 There are exactly eleven core commands; tasks, implement, converge and checklist
-are retired. The requirements checklist remains part of specify/clarify.
+are retired. Core specify creates the requirements checklist. Lean specify omits
+checklist creation, and clarify revalidates the checklist only when it exists.
 
 ## Install from this fork
 
@@ -112,16 +113,22 @@ retained in history. Removed task records remain in history. IDs must not be reu
 `impcode` reads `status`, calls `start`, then `complete` or `block` for each task.
 
 States are `PENDING`, `IN_PROGRESS`, `CODE_COMPLETE`, `BLOCKED` and `NEEDS_REVIEW`.
-An interrupted `IN_PROGRESS` task resumes the same attempt. Failed attempts are bounded
-to three per unchanged task/design; independent ready tasks remain available. Existing
-source is inspected and continued, never erased merely to resume. Source hashes detect
-external changes; authorized integration into shared files updates earlier file evidence.
+An interrupted `IN_PROGRESS` task resumes the same attempt. Each coding or review cycle
+allows three attempts. Completion closes the cycle. A required review after completion
+gets a fresh budget and keeps the previous completion evidence in history. A failed
+attempt consumes its current cycle's budget, and independent ready tasks remain
+available after that budget is spent. Inspect and continue existing source. Preserve
+that source when resuming.
+Source hashes detect external changes, and authorized integration into shared files
+updates earlier file evidence.
 A changed task or recorded source requires explicit review of its completed dependents,
 including indirect dependents. Resume and complete those reviews in dependency order.
 Compatible code can pass review with a coding note and its existing bytes.
 
 Existing schema-1 `files` arrays and ledgers continue to work. Each path requires
 a nonempty regular file unless also listed in the optional `delete_files` array.
+Coding task paths exclude the selected feature's workflow artifacts, including
+contracts and requirements checklists, even when the feature uses a custom directory.
 For a rename, use `"files": ["src/old.py", "src/new.py"], "delete_files": ["src/old.py"]`.
 The helper checks the final state of both paths. It records `absent` for the removed
 path and a digest for the destination. An approved deletion of a prior owner's output
@@ -151,7 +158,11 @@ inspection and document/progress helpers remain allowed.
 Context/progress reads do not persist `.specify/feature.json`. Analyze reports errors
 in malformed task inventories; it does not repair those inputs automatically.
 
-The new stage helpers require the selected feature directory to be inside the project.
+Specify validates the canonical feature destination inside the project before
+creating artifacts or changing the active selection. After writing the spec, it
+saves the validated project-relative directory. An invalid destination leaves the
+existing selection and the proposed directory untouched.
+The subsequent stage helpers also require an in-project feature directory.
 Move externally stored feature artifacts deliberately before migrating such a project;
 the helpers never silently copy or redirect them.
 
@@ -186,7 +197,7 @@ on PATH. For a project initialized with Codex, use:
 specify integration upgrade codex
 ```
 
-Upgrade recognizes the parent revision's bundled speckit 1.0.2 by its content digest.
+Upgrade recognizes stock bundled speckit 1.0.2 and earlier stock 2.0.0 by content digest.
 It installs the fork workflow and updates its registry entry. A changed bundled YAML
 blocks automatic replacement, including when upgrading with `--force`. Back up
 `.specify/workflows/speckit/workflow.yml` outside the install directory and review
@@ -208,18 +219,31 @@ old integration. After migration start a new run with
 `specify workflow run speckit --input spec="Your feature description"`.
 Review custom overlays and explicitly sourced workflows against the new command names.
 
-Normal upgrade refreshes tracked unchanged skills/shared files and preserves customizations;
-review any reported conflicts. Do not use `--force` without reviewing what it overwrites.
+Normal upgrade refreshes tracked unchanged commands and shared files and preserves
+customizations. Move any untracked file reported at a command destination before retrying.
+For a legacy Hermes installation, this check also covers new global skill
+destinations introduced by the fork.
+Hermes shares skills across projects. Check other projects and move the retired
+skill directories listed by upgrade outside `~/.hermes/skills`, then retry.
+See [Hermes migration](integrations/hermes.md#global-ownership-and-removal).
+Do not use `--force` without reviewing what it overwrites.
 Generated skills are copies: editing repository templates does not refresh an existing
 project automatically. Old user-modified skills may be retained and require manual migration.
+If you upgrade a secondary integration first, upgrade the project's default
+integration to migrate the shared workflow used by `integration: auto`.
 
 Preserve legacy `tasks.md` as historical evidence. Have taskscode classify and migrate
 only programming work, keeping stable IDs and source evidence; move testing/deployment
 responsibilities to their owners. Legacy checkboxes are not proof of correct code or tests.
 Create architecture/environment decisions before regenerating implementation design.
 
-The bundled lean preset overrides only constitution/specify. Its old plan/tasks/implement
-files are not registered. Git hooks use taskscode/impcode names and no longer commit from
+The bundled Lean 2.0.0 preset overrides constitution and specify. Its specify
+creates `spec.md` without a requirements checklist. Before upgrading an
+integration with upstream Lean 1.0.0 installed, back up any customized preset sources and
+commands, then run `specify preset update lean` or `specify preset remove lean`. This
+retires the preset's old plan/tasks/implement overrides. Retry the integration upgrade
+and review any generated command changes it reports before authorizing `--force`.
+Git hooks use taskscode/impcode names and no longer commit from
 analyze. The GitHub extension prefers tasks-code.md and keeps a tasks.md fallback for
 upstream projects. Third-party presets, extensions and custom workflows need a contract
 review; legacy tasks/implement hooks are not automatically aliased to the new names.
@@ -233,10 +257,17 @@ new context/progress contracts for all changed stages.
 Every bundled command uses `capture: true` and `verify_completion: true`. A zero
 process exit code alone cannot advance the workflow. The agent must report completion
 for the current invocation and provide matching SHA-256 hashes of its output files.
-Missing, blocked, stale, truncated or mismatched evidence fails the step. If clarification
-needs an answer, supply it before resuming the failed step. Verification checks reported
-completion and file identity; it does not prove semantic correctness or enforce a sandbox.
-Review gates and the separate test stage remain necessary.
+The verified `spec.md` binds the run to its feature directory for both core and
+Lean specify. The checklist is supplementary receipt evidence when available.
+Subsequent commands receive this feature even when another run updates the
+project selector. Each stage
+must report its principal output in the bound feature or shared project memory.
+Before advancing past `impcode`, the runner checks the read-only coding ledger for
+`CODE_COMPLETE`. Missing, blocked, stale, truncated or mismatched evidence fails the
+step. If clarification needs an answer, supply it before resuming the failed step.
+Semantic correctness is evaluated through the review gates and the separate test stage.
+An existing stock 2.0.0 run can recover its feature from the saved specify receipt.
+If that receipt does not identify a feature, start a new run with the current bundle.
 
 Run tests in this checkout's virtual environment:
 

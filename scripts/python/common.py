@@ -8,7 +8,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 
 def _trim_trailing_separators(value: Path) -> str:
@@ -85,7 +85,7 @@ def read_feature_json_feature_directory(repo_root: Path) -> str:
     if not feature_json.is_file():
         return ""
     try:
-        data = json.loads(feature_json.read_text(encoding="utf-8"))
+        data = json.loads(feature_json.read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return ""
     value = data.get("feature_directory") if isinstance(data, dict) else None
@@ -343,7 +343,7 @@ def resolve_template(template_name: str, repo_root: Path) -> Path | None:
     if ext_dir.is_dir():
         for extension_id in _sorted_extension_ids(ext_dir):
             ext = ext_dir / extension_id
-            candidate = _conventional_template(ext, template_name)
+            candidate = resolve_extension_template(ext, template_name)
             if candidate is not None:
                 return candidate
 
@@ -421,9 +421,8 @@ class _DelegatedYAML:
     `uv tool install` / `pipx` venv invisible to the bare `python3` a script
     is launched with). See #4443.
 
-    Only ``_preset_template_layer`` calls this, and only the ``type``,
-    ``name``, ``file``, and ``strategy`` fields of each ``provides.templates``
-    entry are ever inspected, so the child drops every other top-level
+    Only the ``type``, ``name``, ``file``, and ``strategy`` fields of each
+    ``provides.templates`` entry are inspected, so the child drops every other top-level
     manifest field (e.g. free-form ``metadata``) and every other per-entry
     field (e.g. ``description``) before serializing: a valid, ignored YAML
     alias DAG in either place is otherwise unrepresentable in JSON without
@@ -609,6 +608,49 @@ def _preset_template_layer(
     return (conventional, "replace") if conventional is not None else None
 
 
+def resolve_extension_template(extension_dir: Path, template_name: str) -> Path | None:
+    """Mirror the extension layer of the artifact resolver in installed scripts."""
+    if not _is_safe_component(template_name):
+        return None
+    manifest = extension_dir / "extension.yml"
+    if manifest.is_file():
+        yaml = _import_yaml()
+        if yaml is None:
+            # Shell-only projects can still use conventional paths. A Python
+            # executable with PyYAML enables manifest-defined paths, as for
+            # the existing preset manifest resolver.
+            return _conventional_template(extension_dir, template_name)
+        try:
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, yaml.YAMLError):
+            data = None
+
+        provides = data.get("provides") if isinstance(data, dict) else None
+        entries = provides.get("templates") if isinstance(provides, dict) else None
+        if isinstance(entries, list):
+            for entry in entries:
+                if not isinstance(entry, dict) or entry.get("name") != template_name:
+                    continue
+                file = entry.get("file")
+                if not isinstance(file, str) or not file or "strategy" in entry:
+                    break
+                relative = Path(file)
+                if (
+                    relative.anchor or PureWindowsPath(file).anchor
+                    or ".." in relative.parts or "\\" in file
+                    or file != file.strip() or file.endswith("/")
+                ):
+                    break
+                candidate = extension_dir / relative
+                try:
+                    candidate.resolve().relative_to(extension_dir.resolve())
+                    return candidate if candidate.is_file() else None
+                except (OSError, RuntimeError, ValueError):
+                    return None
+
+    return _conventional_template(extension_dir, template_name)
+
+
 def resolve_template_content(template_name: str, repo_root: Path) -> str | None:
     """Resolve and compose template content through the project layer stack."""
     if not _is_safe_component(template_name):
@@ -664,7 +706,7 @@ def resolve_template_content(template_name: str, repo_root: Path) -> str | None:
     extensions_dir = repo_root / ".specify" / "extensions"
     for extension_id in _sorted_extension_ids(extensions_dir):
         extension_dir = extensions_dir / extension_id
-        candidate = _conventional_template(extension_dir, template_name)
+        candidate = resolve_extension_template(extension_dir, template_name)
         if candidate is not None:
             layers.append((candidate, "replace"))
             return compose_from_base()

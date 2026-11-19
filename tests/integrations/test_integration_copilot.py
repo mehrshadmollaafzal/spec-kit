@@ -242,15 +242,17 @@ class TestCopilotCommandsMode:
         from specify_cli.integrations.copilot import CopilotIntegration
         copilot = CopilotIntegration()
         m = IntegrationManifest("copilot", tmp_path)
-        copilot.setup(tmp_path, m, parsed_options={"commands": True})
+        copilot.setup(tmp_path, m, script_type="sh", parsed_options={"commands": True})
 
         specify_file = tmp_path / ".github" / "agents" / "speckit.specify.agent.md"
         content = specify_file.read_text(encoding="utf-8")
 
-        assert "resolve-template" in content
+        assert ".specify/scripts/bash/workflow.sh context specify --json" in content
+        assert '--feature-directory "<candidate directory>"' in content
         assert "{SCRIPT}" not in content
-        assert "parse `TEMPLATE_CONTENT` as the active `spec-template`" in content
-        assert "Write `TEMPLATE_CONTENT` to `SPECIFY_FEATURE_DIRECTORY/spec.md`" in content
+        assert "Parse `TEMPLATE_CONTENT` as the active `spec-template`" in content
+        assert "Use `TEMPLATE_CONTENT` as the starting point for the spec" in content
+        assert "Write the specification to `SPEC_FILE`" in content
         assert "Copy the resolved `spec-template` file" not in content
         assert "Copy `.specify/templates/spec-template.md`" not in content
         assert "Load `.specify/templates/spec-template.md`" not in content

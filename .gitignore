@@ -44,6 +44,7 @@ env/
 .genreleases/
 *.zip
 !tests/fixtures/fork-workflow/upstream-codex-init.zip
+!tests/fixtures/fork-workflow/upstream-codex-lean-overlay.zip
 sdd-*/
 docs/dev
 

@@ -210,7 +210,7 @@ Execution steps:
 
 9. **Re-validate Spec Quality Checklist** (if it exists):
    - Check if `FEATURE_DIR/checklists/requirements.md` exists.
-   - If it does NOT exist, skip this step silently.
+   - Skip checklist re-validation when the file is absent, as in a new Lean feature.
    - If it exists:
      1. Read the checklist file.
      2. Identify all GitHub task-list checkbox lines — lines matching `- [ ]`, `- [x]`, or `- [X]` (case-insensitive, tolerant of leading whitespace for nested items) outside of code fences. Ignore all other content (headings, notes, non-checkbox bullets, metadata).

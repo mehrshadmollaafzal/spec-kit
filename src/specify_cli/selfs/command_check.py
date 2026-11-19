@@ -16,6 +16,7 @@ def self_check() -> None:
     """
     from .._version import (
         _MANUAL_TAG_PLACEHOLDER,
+        _emit_release_install_guidance,
         _fetch_latest_release_tag,
         _get_installed_version,
         _is_newer,
@@ -32,6 +33,7 @@ def self_check() -> None:
         assert failure_reason is not None
         console.print(f"Installed: {installed}")
         console.print(f"[yellow]Could not check latest release:[/yellow] {failure_reason}")
+        _emit_release_install_guidance(failure_reason)
         return
 
     manual_tag = _manual_tag_or_placeholder(tag)

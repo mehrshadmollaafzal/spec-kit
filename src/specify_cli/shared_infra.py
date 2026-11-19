@@ -209,7 +209,7 @@ def _ensure_safe_shared_directory(
             continue
         if not create:
             raise ValueError(f"{context.capitalize()} does not exist: {label}")
-        current.mkdir()
+        current.mkdir(exist_ok=True)
         if current.is_symlink():
             raise SymlinkedSharedPathError(f"Refusing to use symlinked {context}: {label}")
         try:
@@ -255,7 +255,13 @@ def _exclusive_project_lock(project_root: Path, lock_name: str, *, context: str)
         )
     except ValueError as exc:
         raise OSError(str(exc)) from exc
-    lock_file = lock_dir / lock_name
+    with _exclusive_file_lock(lock_dir / lock_name, context=context):
+        yield
+
+
+@contextlib.contextmanager
+def _exclusive_file_lock(lock_file: Path, *, context: str, blocking: bool = True):
+    """Lock a stable file in a verified directory until its handle closes."""
     if lock_file.is_symlink():
         raise OSError(f"Refusing to use symlinked {context} lock: {lock_file}")
 
@@ -273,21 +279,24 @@ def _exclusive_project_lock(project_root: Path, lock_name: str, *, context: str)
             import msvcrt
             import time
 
-            if os.fstat(fd).st_size == 0:
-                os.write(fd, b"\0")
+            # Lock the first byte even on an empty file. Writing it would
+            # race with another process already holding that byte range.
+            os.lseek(fd, 0, os.SEEK_SET)
             while True:
-                os.lseek(fd, 0, os.SEEK_SET)
                 try:
                     msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
                     break
                 except OSError as exc:
                     if exc.errno not in (errno.EACCES, errno.EDEADLK):
                         raise
+                    if not blocking:
+                        raise BlockingIOError(errno.EAGAIN, f"{context} is locked", str(lock_file)) from exc
                     time.sleep(0.05)
         else:
             import fcntl
 
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            mode = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+            fcntl.flock(fd, mode)
         yield
     finally:
         os.close(fd)

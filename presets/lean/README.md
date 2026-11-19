@@ -1,28 +1,17 @@
-> In this fork, lean overrides only constitution and specify. Architecture, environment,
-> plan, taskscode, analyze, impcode, deployment and test retain their core contracts.
-> The older three-stage overrides below are upstream reference material and are not installed.
-
 # Lean Workflow
 
-A minimal preset that strips the Spec Kit workflow down to its essentials — just the prompt, just the artifact.
+Lean supplies concise constitution and specification prompts for the
+[eleven command workflow](../../docs/fork-workflow.md).
 
-## When to Use
+| Command | Output |
+| --- | --- |
+| `speckit.constitution` | `.specify/memory/constitution.md` |
+| `speckit.specify` | `spec.md` and the active feature selection |
 
-Use Lean when you want the structured specify → plan → tasks → implement pipeline without the ceremony of the full templates. Each command produces a single focused Markdown file with no boilerplate sections to fill in.
-
-## Commands Included
-
-| Command | Output | Description |
-|---------|--------|-------------|
-| `speckit.specify` | `spec.md` | Create a specification from a feature description |
-| `speckit.plan` | `plan.md` | Create an implementation plan from the spec |
-| `speckit.tasks` | `tasks.md` | Create dependency-ordered tasks from spec and plan |
-| `speckit.implement` | *(code)* | Execute all tasks in order, marking progress |
-| `speckit.constitution` | `constitution.md` | Create or update the project constitution |
-
-## What It Replaces
-
-Lean overrides the five core workflow commands with self-contained prompts that produce each artifact directly — no separate template files involved. The result is a shorter, more direct workflow.
+Lean specify creates one requirements artifact, `spec.md`. The bundled
+workflow uses that file to verify completion and bind the run to the feature.
+Clarify proceeds without a requirements checklist and revalidates an existing
+checklist when present. The remaining stages use their core command contracts.
 
 ## Installation
 

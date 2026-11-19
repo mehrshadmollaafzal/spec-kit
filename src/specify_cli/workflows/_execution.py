@@ -372,6 +372,8 @@ def scope_summaries(tree, run_status="running"):
 
 def child_context_for_call(parent, binding, definition):
     """Create the private context for one bound workflow call."""
+    from ._speckit_contract import uses_speckit_contract
+
     return StepContext(
         inputs=binding["inputs"],
         project_root=parent.project_root,
@@ -384,6 +386,7 @@ def child_context_for_call(parent, binding, definition):
         default_options=definition.default_options,
         default_reasoning_effort=definition.default_reasoning_effort,
         default_context_size=definition.default_context_size,
+        speckit_completion=uses_speckit_contract(definition),
     )
 
 

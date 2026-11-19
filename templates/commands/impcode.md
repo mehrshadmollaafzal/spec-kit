@@ -82,10 +82,11 @@ progress helper are allowed. No hidden test execution through hooks or package s
    hashes and expected absences in code-progress.json. Use that ledger as the
    completion artifact for removed paths. The helper never edits application files.
 7. On a failed attempt, use `block --task T001 --note "actual obstacle and changed files"`.
-   At most three starts/attempts per unchanged task/design are allowed. Retry only when
-   a concrete correction is available; never spin. After the bound, leave the obstacle
-   recorded and continue independent work. Do not repeatedly retry in-progress work
-   without recording failed attempts. A process interruption alone is not a failed attempt.
+   Each coding or review cycle allows three attempts. Successful completion closes the
+   cycle. When a completed task needs review, `start` opens a fresh cycle and retains prior
+   completion evidence. Retry only when a concrete correction is available. After the
+   bound, leave the obstacle recorded and continue independent work. Record each failed
+   attempt before retrying. An interrupted `IN_PROGRESS` task resumes the same attempt.
 8. Continue until all tasks are CODE_COMPLETE or every remaining task has a genuine
    recorded obstacle/dependency. Do not stop after an arbitrary task count. Checkpoint
    each task and before context/session limits; a new session resumes from this ledger.

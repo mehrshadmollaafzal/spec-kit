@@ -1436,6 +1436,17 @@ def test_python_variant_skips_yaml_probe_for_manifest_less_preset(
     )
 
 
+def test_extension_without_yaml_parser_keeps_conventional_template(tmp_path, monkeypatch):
+    extension = tmp_path / "extension"
+    (extension / "templates").mkdir(parents=True)
+    conventional = extension / "templates" / f"{TEMPLATE}.md"
+    conventional.write_text("# Conventional extension template\n", encoding="utf-8")
+    (extension / "extension.yml").write_text("provides: {commands: []}\n", encoding="utf-8")
+    monkeypatch.setattr(python_common, "_import_yaml", lambda: None)
+
+    assert python_common.resolve_extension_template(extension, TEMPLATE) == conventional
+
+
 @requires_bash
 def test_python_variant_reports_concise_error_for_malformed_delegated_manifest(
     tmp_path: Path,

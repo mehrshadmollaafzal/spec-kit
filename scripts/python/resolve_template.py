@@ -12,6 +12,7 @@ try:
     from common import (
         TemplateResolutionError,
         get_repo_root,
+        resolve_extension_template,
         resolve_template_content,
     )
 except ImportError:  # pragma: no cover - direct execution from unusual cwd
@@ -19,6 +20,7 @@ except ImportError:  # pragma: no cover - direct execution from unusual cwd
     from common import (
         TemplateResolutionError,
         get_repo_root,
+        resolve_extension_template,
         resolve_template_content,
     )
 
@@ -27,10 +29,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("template_name")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--extension-dir", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
-    repo_root = get_repo_root(Path(__file__))
     try:
+        if args.extension_dir is not None:
+            # Bash and PowerShell resolve extension paths through this branch
+            # and continue composing their own layers with the selected base.
+            path = resolve_extension_template(args.extension_dir, args.template_name)
+            relative = path.relative_to(args.extension_dir).as_posix() if path else None
+            if args.json:
+                print(json.dumps(relative, ensure_ascii=True))
+            elif relative is not None:
+                sys.stdout.write(relative)
+            return 0
+        repo_root = get_repo_root(Path(__file__))
         content = resolve_template_content(args.template_name, repo_root)
     except TemplateResolutionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

@@ -204,8 +204,8 @@ $tasks = Join-Path $featureDir 'tasks.md'
 $codingTasks = Join-Path $featureDir 'tasks-code.md'
 if (Test-Path -LiteralPath $codingTasks -PathType Leaf) { $tasks = $codingTasks }
 if (-not (Test-Path -LiteralPath $tasks -PathType Leaf)) {
-    [Console]::Error.WriteLine("ERROR: tasks.md not found in $featureDir")
-    [Console]::Error.WriteLine("Run the Spec Kit tasks command first to create the task list.")
+    [Console]::Error.WriteLine("ERROR: No task list found in $featureDir (expected tasks-code.md or legacy tasks.md)")
+    [Console]::Error.WriteLine("Run the Spec Kit taskscode command first to create the task list.")
     exit 1
 }
 

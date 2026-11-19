@@ -223,8 +223,8 @@ def main(argv: list[str]) -> int:
         tasks = feature_dir / "tasks.md"  # Read-only compatibility for upstream projects.
     if not tasks.is_file():
         _die(
-            f"ERROR: tasks.md not found in {feature_dir}",
-            "Run the Spec Kit tasks command first to "
+            f"ERROR: No task list found in {feature_dir} (expected tasks-code.md or legacy tasks.md)",
+            "Run the Spec Kit taskscode command first to "
             "create the task list.",
         )
 

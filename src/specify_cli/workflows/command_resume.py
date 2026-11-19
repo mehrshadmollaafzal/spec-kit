@@ -20,7 +20,6 @@ def workflow_resume(
 ):
     """Resume a paused or failed workflow run."""
     from ..integrations.installer import IntegrationInstallError
-    from ._execution import CheckpointError
     from .engine import RunState, WorkflowEngine
 
     project_root = cli._require_specify_project(load_integrations=False)
@@ -50,15 +49,10 @@ def workflow_resume(
     inputs = cli._parse_input_values(input_values, json_output=json_output)
     err = cli._error_console(json_output)
 
-    # Pre-load the persisted run state so a run started from an installed
-    # workflow that has since been disabled cannot resume unchecked --
-    # engine.resume() replays the run directly from disk with no registry
-    # awareness at all, which would otherwise bypass the same disabled
-    # guard `workflow run` enforces. Runs without installed_workflow_id
-    # (a direct/non-installed source, or a run persisted before this field
-    # existed) are unaffected and resume exactly as before.
+    # Preserve the CLI preflight error contract without opening state.json.
+    # An open reader can block another process from replacing it on Windows.
     try:
-        pre_state = RunState.load(run_id, project_root)
+        RunState._state_path(run_id, project_root).stat()
     except FileNotFoundError:
         err.print(f"[red]Error:[/red] Run not found: {run_id}")
         raise cli.typer.Exit(1)
@@ -69,28 +63,26 @@ def workflow_resume(
         err.print(f"[red]Resume failed:[/red] {cli._escape_markup(str(exc))}")
         raise cli.typer.Exit(1)
 
-    if pre_state.installed_workflow_id is not None:
-        try:
+    def check_installed_workflow(state: RunState) -> None:
+        # Use the locked checkpoint for the disabled-workflow check. Legacy
+        # ownership is saved with the resumed checkpoint, so a stale CLI read
+        # cannot restore an earlier execution state over another resume.
+        if state.installed_workflow_id is not None:
             owner_root = resume_state._resolve_run_owner_root(
-                pre_state.installed_registry_root, project_root
+                state.installed_registry_root, project_root
             )
-        except ValueError as exc:
-            err.print(f"[red]Error:[/red] {cli._escape_markup(str(exc))}")
-            raise cli.typer.Exit(1)
-        cli._require_enabled_workflow(owner_root, pre_state.installed_workflow_id, err)
-    elif not pre_state.installed_origin_tracked:
-        if cli._require_enabled_workflow(project_root, pre_state.workflow_id, err):
-            pre_state.installed_workflow_id = pre_state.workflow_id
-        pre_state.installed_origin_tracked = True
-        try:
-            pre_state.save()
-        except (OSError, CheckpointError) as exc:
-            err.print(f"[red]Resume failed:[/red] {cli._escape_markup(str(exc))}")
-            raise cli.typer.Exit(1)
+            cli._require_enabled_workflow(owner_root, state.installed_workflow_id, err)
+        elif not state.installed_origin_tracked:
+            if cli._require_enabled_workflow(project_root, state.workflow_id, err):
+                state.installed_workflow_id = state.workflow_id
+            state.installed_origin_tracked = True
 
+    engine._before_resume = check_installed_workflow
     try:
         with cli._stdout_to_stderr_when(json_output):
             state = engine.resume(run_id, inputs or None)
+    except cli.typer.Exit:
+        raise
     except FileNotFoundError as exc:
         if engine._execution_state.get() is not None:
             cli._fail_workflow_execution(
@@ -107,6 +99,9 @@ def workflow_resume(
             exc, json_output=json_output, state=execution_state, resume=True,
         )
     except OSError as exc:
+        if engine._execution_state.get() is None:
+            err.print(f"[red]Resume failed:[/red] {cli._escape_markup(str(exc))}")
+            raise cli.typer.Exit(1)
         cli._fail_workflow_execution(
             exc, json_output=json_output, state=engine._execution_state.get(), resume=True,
         )

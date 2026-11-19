@@ -17,6 +17,7 @@ runner = CliRunner()
 
 SENTINEL_GH_TOKEN = "SENTINEL-GH-TOKEN-VALUE"
 SENTINEL_GITHUB_TOKEN = "SENTINEL-GITHUB-TOKEN-VALUE"
+_FORK_GIT_SOURCE = "git+https://github.com/mehrshadmollaafzal/spec-kit.git"
 _RATE_LIMITED_REASON = (
     "rate limited (configure ~/.specify/auth.json with a GitHub token)"
 )
@@ -51,7 +52,8 @@ class TestUserStory1:
         assert "Update available" in output
         assert "0.7.4" in output
         assert "0.9.0" in output
-        assert "git+https://github.com/github/spec-kit.git@v0.9.0" in output
+        assert f"{_FORK_GIT_SOURCE}@v0.9.0" in output
+        assert "git+https://github.com/github/spec-kit.git" not in output
 
     def test_up_to_date_prints_current_only(self):
         with patch("specify_cli._version._get_installed_version", return_value="0.9.0"), patch(
@@ -87,9 +89,9 @@ class TestUserStory1:
         assert "Current version could not be determined" in output
         assert "Latest release: v0.7.4" in output
         assert "0.7.4" in output
-        assert "git+https://github.com/github/spec-kit.git@v0.7.4" in output
+        assert f"{_FORK_GIT_SOURCE}@v0.7.4" in output
         assert "specify self upgrade" in output
-        assert "pipx install --force git+https://github.com/github/spec-kit.git@v0.7.4" in output
+        assert f"pipx install --force {_FORK_GIT_SOURCE}@v0.7.4" in " ".join(output.split())
 
     def test_unknown_installed_uses_placeholder_when_latest_tag_is_invalid(self):
         with patch("specify_cli._version._get_installed_version", return_value="unknown"), patch(
@@ -101,7 +103,7 @@ class TestUserStory1:
         assert result.exit_code == 0
         assert "Latest release: vX.Y.Z" in output
         assert "Could not validate latest release tag from GitHub." in output
-        assert "git+https://github.com/github/spec-kit.git@vX.Y.Z" in output
+        assert f"{_FORK_GIT_SOURCE}@vX.Y.Z" in output
         assert "v0.9.0;echo unsafe" not in output
 
     def test_unparseable_tag_reports_validation_failure_without_raw_tag(self):
@@ -118,7 +120,7 @@ class TestUserStory1:
         assert "Latest release: vX.Y.Z" in output
         assert "0.7.4" in output
         assert "not-a-version" not in output
-        assert "git+https://github.com/github/spec-kit.git@vX.Y.Z" in output
+        assert f"{_FORK_GIT_SOURCE}@vX.Y.Z" in output
 
 
 class TestUserStory2:

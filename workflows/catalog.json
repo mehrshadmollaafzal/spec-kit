@@ -11,6 +11,7 @@
       "version": "2.0.0",
       "url": "https://raw.githubusercontent.com/mehrshadmollaafzal/spec-kit/3c5392f611b036105659156a321ff62e0dc98eb2/workflows/speckit/workflow.yml",
       "sha256": "a61ed36e7e2a163321dbce93be244194690d0fae5d2de664432e323963607802",
+      "bundled_sha256": "f92aa83ffb80fa3a12a7bc1c3b784c0014dbe506a904422f583f746728e39bc4",
       "tags": ["sdd", "full-cycle"],
       "bundled": true
     },
